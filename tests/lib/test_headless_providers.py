@@ -12,6 +12,7 @@ from terok.lib.containers.agent_config import resolve_provider_value
 from terok.lib.containers.headless_providers import (
     HEADLESS_PROVIDERS,
     PROVIDER_NAMES,
+    CLIOverrides,
     apply_provider_config,
     build_headless_command,
     generate_agent_wrapper,
@@ -229,11 +230,11 @@ class GenerateAgentWrapperTests(unittest.TestCase):
     """Tests for generate_agent_wrapper() per provider."""
 
     @staticmethod
-    def _claude_wrapper_fn(has_agents: bool, project: object, skip_permissions: bool) -> str:
+    def _claude_wrapper_fn(cfg: object) -> str:
         """Stub for agents._generate_claude_wrapper used in tests."""
         from terok.lib.containers.agents import _generate_claude_wrapper
 
-        return _generate_claude_wrapper(has_agents, project, skip_permissions)
+        return _generate_claude_wrapper(cfg)
 
     def test_claude_wrapper_uses_claude_function(self) -> None:
         """Claude wrapper defines a claude() function with --add-dir."""
@@ -446,7 +447,7 @@ class ApplyProviderConfigTests(unittest.TestCase):
     def test_model_cli_overrides_config(self) -> None:
         """CLI --model flag overrides config value."""
         p = HEADLESS_PROVIDERS["claude"]
-        pcfg = apply_provider_config(p, {"model": "haiku"}, model_override="opus")
+        pcfg = apply_provider_config(p, {"model": "haiku"}, CLIOverrides(model="opus"))
         self.assertEqual(pcfg.model, "opus")
 
     def test_model_per_provider(self) -> None:
@@ -488,7 +489,7 @@ class ApplyProviderConfigTests(unittest.TestCase):
     def test_timeout_cli_overrides_config(self) -> None:
         """CLI --timeout overrides config value."""
         p = HEADLESS_PROVIDERS["claude"]
-        pcfg = apply_provider_config(p, {"timeout": 3600}, timeout_override=900)
+        pcfg = apply_provider_config(p, {"timeout": 3600}, CLIOverrides(timeout=900))
         self.assertEqual(pcfg.timeout, 900)
 
     def test_timeout_default(self) -> None:
@@ -520,37 +521,39 @@ class ApplyProviderConfigTests(unittest.TestCase):
     def test_instructions_other_provider_in_prompt_extra(self) -> None:
         """Non-Claude/Codex providers get instructions prepended to prompt_extra."""
         p = HEADLESS_PROVIDERS["copilot"]
-        pcfg = apply_provider_config(p, {}, instructions="Custom instructions.")
+        pcfg = apply_provider_config(p, {}, CLIOverrides(instructions="Custom instructions."))
         self.assertIn("Custom instructions.", pcfg.prompt_extra)
 
     def test_instructions_claude_not_in_prompt_extra(self) -> None:
         """Claude provider does NOT get instructions in prompt_extra (uses wrapper)."""
         p = HEADLESS_PROVIDERS["claude"]
-        pcfg = apply_provider_config(p, {}, instructions="Custom instructions.")
+        pcfg = apply_provider_config(p, {}, CLIOverrides(instructions="Custom instructions."))
         self.assertNotIn("Custom instructions.", pcfg.prompt_extra)
 
     def test_instructions_codex_not_in_prompt_extra(self) -> None:
         """Codex provider does NOT get prompt injection (uses wrapper config)."""
         p = HEADLESS_PROVIDERS["codex"]
-        pcfg = apply_provider_config(p, {}, instructions="Custom instructions.")
+        pcfg = apply_provider_config(p, {}, CLIOverrides(instructions="Custom instructions."))
         self.assertNotIn("Custom instructions.", pcfg.prompt_extra)
 
     def test_instructions_opencode_not_in_prompt_extra(self) -> None:
         """OpenCode does NOT get prompt injection (uses opencode.json instructions)."""
         p = HEADLESS_PROVIDERS["opencode"]
-        pcfg = apply_provider_config(p, {}, instructions="Custom instructions.")
+        pcfg = apply_provider_config(p, {}, CLIOverrides(instructions="Custom instructions."))
         self.assertNotIn("Custom instructions.", pcfg.prompt_extra)
 
     def test_instructions_blablador_not_in_prompt_extra(self) -> None:
         """Blablador does NOT get prompt injection (uses opencode.json instructions)."""
         p = HEADLESS_PROVIDERS["blablador"]
-        pcfg = apply_provider_config(p, {}, instructions="Custom instructions.")
+        pcfg = apply_provider_config(p, {}, CLIOverrides(instructions="Custom instructions."))
         self.assertNotIn("Custom instructions.", pcfg.prompt_extra)
 
     def test_instructions_prepended_before_other_prompt_parts(self) -> None:
         """Instructions are prepended before max-turns guidance for other providers."""
         p = HEADLESS_PROVIDERS["copilot"]  # no max_turns_flag
-        pcfg = apply_provider_config(p, {"max_turns": 30}, instructions="Do the thing.")
+        pcfg = apply_provider_config(
+            p, {"max_turns": 30}, CLIOverrides(instructions="Do the thing.")
+        )
         # Instructions should come before the max-turns guidance
         idx_instr = pcfg.prompt_extra.index("Do the thing.")
         idx_turns = pcfg.prompt_extra.index("30 steps")
@@ -561,11 +564,11 @@ class GenerateAllWrappersTests(unittest.TestCase):
     """Tests for generate_all_wrappers() multi-provider file."""
 
     @staticmethod
-    def _claude_wrapper_fn(has_agents: bool, project: object, skip_permissions: bool) -> str:
+    def _claude_wrapper_fn(cfg: object) -> str:
         """Stub for agents._generate_claude_wrapper used in tests."""
         from terok.lib.containers.agents import _generate_claude_wrapper
 
-        return _generate_claude_wrapper(has_agents, project, skip_permissions)
+        return _generate_claude_wrapper(cfg)
 
     def test_all_providers_in_output(self) -> None:
         """Output contains wrapper functions for all six providers."""

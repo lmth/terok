@@ -29,7 +29,12 @@ from terok.lib.containers.agents import (
     _write_session_hook,
     parse_md_agent,
 )
-from terok.lib.containers.task_runners import task_followup_headless, task_run_headless
+from terok.lib.containers.headless_providers import WrapperConfig
+from terok.lib.containers.task_runners import (
+    HeadlessRunRequest,
+    task_followup_headless,
+    task_run_headless,
+)
 from terok.lib.core.projects import load_project
 from test_utils import mock_git_config, write_project
 
@@ -259,7 +264,7 @@ class GenerateClaudeWrapperTests(unittest.TestCase):
     def test_basic_wrapper(self) -> None:
         """Wrapper includes skip-permissions, add-dir /, and git env vars."""
         project = self._make_project()
-        wrapper = _generate_claude_wrapper(has_agents=False, project=project)
+        wrapper = _generate_claude_wrapper(WrapperConfig(has_agents=False, project=project))
         self.assertIn("claude()", wrapper)
         self.assertIn("--dangerously-skip-permissions", wrapper)
         self.assertIn('--add-dir "/"', wrapper)
@@ -272,16 +277,14 @@ class GenerateClaudeWrapperTests(unittest.TestCase):
     def test_wrapper_with_agents(self) -> None:
         """Wrapper includes agents.json reference when has_agents=True."""
         project = self._make_project()
-        wrapper = _generate_claude_wrapper(has_agents=True, project=project)
+        wrapper = _generate_claude_wrapper(WrapperConfig(has_agents=True, project=project))
         self.assertIn("agents.json", wrapper)
 
     def test_wrapper_skip_perms_false(self) -> None:
         """Wrapper omits --dangerously-skip-permissions when skip_permissions=False."""
         project = self._make_project()
         wrapper = _generate_claude_wrapper(
-            has_agents=False,
-            project=project,
-            skip_permissions=False,
+            WrapperConfig(has_agents=False, project=project, skip_permissions=False)
         )
         self.assertNotIn("--dangerously-skip-permissions", wrapper)
         # --add-dir / is always present regardless of skip_permissions
@@ -290,7 +293,7 @@ class GenerateClaudeWrapperTests(unittest.TestCase):
     def test_wrapper_no_model_or_mcp(self) -> None:
         """Wrapper does not contain --model, --mcp-config by default."""
         project = self._make_project()
-        wrapper = _generate_claude_wrapper(has_agents=True, project=project)
+        wrapper = _generate_claude_wrapper(WrapperConfig(has_agents=True, project=project))
         self.assertNotIn("--model", wrapper)
         self.assertNotIn("--mcp-config", wrapper)
         self.assertNotIn("--max-turns", wrapper)
@@ -300,14 +303,16 @@ class GenerateClaudeWrapperTests(unittest.TestCase):
     def test_wrapper_includes_append_system_prompt(self) -> None:
         """Wrapper includes --append-system-prompt when has_instructions=True."""
         project = self._make_project()
-        wrapper = _generate_claude_wrapper(has_agents=False, project=project, has_instructions=True)
+        wrapper = _generate_claude_wrapper(
+            WrapperConfig(has_agents=False, project=project, has_instructions=True)
+        )
         self.assertIn("--append-system-prompt", wrapper)
         self.assertIn("instructions.md", wrapper)
 
     def test_wrapper_timeout_support(self) -> None:
         """Wrapper parses --terok-timeout and wraps claude with timeout."""
         project = self._make_project()
-        wrapper = _generate_claude_wrapper(has_agents=False, project=project)
+        wrapper = _generate_claude_wrapper(WrapperConfig(has_agents=False, project=project))
         # Wrapper should contain timeout flag parsing
         self.assertIn("--terok-timeout", wrapper)
         self.assertIn("_timeout", wrapper)
@@ -322,7 +327,7 @@ class GenerateClaudeWrapperTests(unittest.TestCase):
     def test_wrapper_resume_from_session_file(self) -> None:
         """Wrapper adds --resume from claude-session.txt when it exists."""
         project = self._make_project()
-        wrapper = _generate_claude_wrapper(has_agents=False, project=project)
+        wrapper = _generate_claude_wrapper(WrapperConfig(has_agents=False, project=project))
         self.assertIn("claude-session.txt", wrapper)
         self.assertIn("--resume", wrapper)
 
@@ -435,14 +440,16 @@ class PrepareAgentConfigDirTests(unittest.TestCase):
     @unittest.mock.patch("terok.lib.containers.agents._write_session_hook")
     def test_prepare_agent_config_writes_instructions(self, _mock_hook: object) -> None:
         """Instructions text is written to instructions.md in agent-config dir."""
-        from terok.lib.containers.agents import prepare_agent_config_dir
+        from terok.lib.containers.agents import AgentConfigSpec, prepare_agent_config_dir
 
         project = self._make_project()
         task_id = "test-task-1"
         (project.tasks_root / task_id).mkdir(parents=True, exist_ok=True)
 
         agent_config_dir = prepare_agent_config_dir(
-            project, task_id, subagents=[], instructions="Custom instructions here."
+            AgentConfigSpec(
+                project, task_id, subagents=[], instructions="Custom instructions here."
+            )
         )
         instr_path = agent_config_dir / "instructions.md"
         self.assertTrue(instr_path.is_file())
@@ -451,13 +458,13 @@ class PrepareAgentConfigDirTests(unittest.TestCase):
     @unittest.mock.patch("terok.lib.containers.agents._write_session_hook")
     def test_prepare_agent_config_default_instructions_when_none(self, _mock_hook: object) -> None:
         """Default instructions.md written when instructions is None."""
-        from terok.lib.containers.agents import prepare_agent_config_dir
+        from terok.lib.containers.agents import AgentConfigSpec, prepare_agent_config_dir
 
         project = self._make_project()
         task_id = "test-task-2"
         (project.tasks_root / task_id).mkdir(parents=True, exist_ok=True)
 
-        agent_config_dir = prepare_agent_config_dir(project, task_id, subagents=[])
+        agent_config_dir = prepare_agent_config_dir(AgentConfigSpec(project, task_id, subagents=[]))
         instr_path = agent_config_dir / "instructions.md"
         self.assertTrue(instr_path.is_file())
         content = instr_path.read_text(encoding="utf-8")
@@ -466,14 +473,14 @@ class PrepareAgentConfigDirTests(unittest.TestCase):
     @unittest.mock.patch("terok.lib.containers.agents._write_session_hook")
     def test_wrapper_has_append_system_prompt_when_instructions(self, _mock_hook: object) -> None:
         """Claude wrapper includes --append-system-prompt when instructions are provided."""
-        from terok.lib.containers.agents import prepare_agent_config_dir
+        from terok.lib.containers.agents import AgentConfigSpec, prepare_agent_config_dir
 
         project = self._make_project()
         task_id = "test-task-3"
         (project.tasks_root / task_id).mkdir(parents=True, exist_ok=True)
 
         agent_config_dir = prepare_agent_config_dir(
-            project, task_id, subagents=[], instructions="Test instructions."
+            AgentConfigSpec(project, task_id, subagents=[], instructions="Test instructions.")
         )
         wrapper = (agent_config_dir / "terok-agent.sh").read_text(encoding="utf-8")
         self.assertIn("--append-system-prompt", wrapper)
@@ -525,7 +532,9 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_id = task_run_headless("proj_hl", "Fix the auth bug")
+                        task_id = task_run_headless(
+                            HeadlessRunRequest("proj_hl", "Fix the auth bug")
+                        )
 
                     self.assertEqual(task_id, "1")
 
@@ -565,7 +574,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_mount", "test prompt")
+                        task_run_headless(HeadlessRunRequest("proj_mount", "test prompt"))
 
                     # Check the podman run command has the agent-config mount
                     cmd = run_mock.call_args[0][0]
@@ -601,7 +610,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_wrap", "test")
+                        task_run_headless(HeadlessRunRequest("proj_wrap", "test"))
 
                     # Verify wrapper was written
                     wrapper = (
@@ -641,7 +650,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_hook", "test")
+                        task_run_headless(HeadlessRunRequest("proj_hook", "test"))
 
                     settings = base / "envs" / "_claude-config" / "settings.json"
                     self.assertTrue(settings.is_file())
@@ -690,7 +699,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_agents", "test")
+                        task_run_headless(HeadlessRunRequest("proj_agents", "test"))
 
                     agents_file = (
                         state_dir / "tasks" / "proj_agents" / "1" / "agent-config" / "agents.json"
@@ -746,7 +755,9 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_sel", "test", agents=["debugger"])
+                        task_run_headless(
+                            HeadlessRunRequest("proj_sel", "test", agents=["debugger"])
+                        )
 
                     agents_file = (
                         state_dir / "tasks" / "proj_sel" / "1" / "agent-config" / "agents.json"
@@ -787,10 +798,12 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     buffer = StringIO()
                     with redirect_stdout(buffer):
                         task_run_headless(
-                            "proj_flags",
-                            "test",
-                            model="opus",
-                            max_turns=100,
+                            HeadlessRunRequest(
+                                "proj_flags",
+                                "test",
+                                model="opus",
+                                max_turns=100,
+                            )
                         )
 
                     # Model/max_turns should be in the bash command
@@ -840,7 +853,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_name", "test")
+                        task_run_headless(HeadlessRunRequest("proj_name", "test"))
 
                     cmd = run_mock.call_args[0][0]
                     name_idx = cmd.index("--name")
@@ -875,7 +888,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_meta", "test")
+                        task_run_headless(HeadlessRunRequest("proj_meta", "test"))
 
                     meta_path = state_dir / "projects" / "proj_meta" / "tasks" / "1.yml"
                     meta = yaml.safe_load(meta_path.read_text())
@@ -910,7 +923,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_nf", "test", follow=False)
+                        task_run_headless(HeadlessRunRequest("proj_nf", "test", follow=False))
 
                     # Stream should NOT be called in no-follow mode
                     stream_mock.assert_not_called()
@@ -948,7 +961,7 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     run_mock.return_value = subprocess.CompletedProcess([], 0)
                     buffer = StringIO()
                     with redirect_stdout(buffer):
-                        task_run_headless("proj_cmd", "test")
+                        task_run_headless(HeadlessRunRequest("proj_cmd", "test"))
 
                     cmd = run_mock.call_args[0][0]
                     bash_cmd = cmd[-1]
@@ -1002,9 +1015,11 @@ class TaskRunHeadlessTests(unittest.TestCase):
                     buffer = StringIO()
                     with redirect_stdout(buffer):
                         task_run_headless(
-                            "proj_cfgfile",
-                            "test",
-                            config_path=str(agent_config),
+                            HeadlessRunRequest(
+                                "proj_cfgfile",
+                                "test",
+                                config_path=str(agent_config),
+                            )
                         )
 
                     # Verify agents.json contains the config file agent
@@ -1054,7 +1069,7 @@ class TaskFollowupHeadlessTests(unittest.TestCase):
                 run_mock.return_value = subprocess.CompletedProcess([], 0)
                 buffer = StringIO()
                 with redirect_stdout(buffer):
-                    task_id = task_run_headless(project_id, "initial prompt")
+                    task_id = task_run_headless(HeadlessRunRequest(project_id, "initial prompt"))
         return task_id
 
     def test_followup_writes_new_prompt(self) -> None:
