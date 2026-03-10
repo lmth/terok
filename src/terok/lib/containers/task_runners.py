@@ -53,6 +53,8 @@ from .tasks import (
 if TYPE_CHECKING:
     from ..core.project_model import Project
 
+_LOCALHOST = "127.0.0.1"
+
 
 @dataclass(frozen=True)
 class HeadlessRunRequest:
@@ -370,7 +372,7 @@ def task_run_web(
     # original environment.
     if container_state is not None:
         color_enabled = _supports_color()
-        url = f"http://127.0.0.1:{port}/"
+        url = f"http://{_LOCALHOST}:{port}/"
         if container_state == "running":
             print(f"Container {_green(cname, color_enabled)} is already running.")
             print(f"Web UI: {_blue(url, color_enabled)}")
@@ -396,7 +398,7 @@ def task_run_web(
         env=env,
         volumes=volumes,
         project=project,
-        extra_args=["-p", f"127.0.0.1:{port}:7860"],
+        extra_args=["-p", f"{_LOCALHOST}:{port}:7860"],
     )
 
     # Stream initial logs and detach once the Terok Web UI server reports that it
@@ -450,7 +452,7 @@ def task_run_web(
         # Exit with non-zero status to signal that the web UI did not start.
         raise SystemExit(1)
 
-    url = f"http://127.0.0.1:{port}/"
+    url = f"http://{_LOCALHOST}:{port}/"
     log_command = f"podman logs -f {cname}"
     stop_command = f"podman stop {cname}"
 
@@ -807,7 +809,7 @@ def task_restart(project_id: str, task_id: str, backend: str | None = None) -> N
         elif mode == "web":
             port = meta.get("web_port")
             if port:
-                print(f"Web UI: http://127.0.0.1:{port}/")
+                print(f"Web UI: http://{_LOCALHOST}:{port}/")
     else:
         # Container doesn't exist - re-run the task
         print(f"Container {cname} not found, re-running task...")
