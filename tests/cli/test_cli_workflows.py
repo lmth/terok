@@ -1,15 +1,23 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-import unittest
+"""Tests for higher-level CLI workflow shortcuts."""
+
+from __future__ import annotations
+
 import unittest.mock
 from collections.abc import Callable
+
+import pytest
+
+from testfs import FAKE_GATE_DIR
 
 
 def _patch_init_steps[T](func: Callable[..., T]) -> Callable[..., T]:
     """Apply project-init step mocks to a test method.
 
-    Mock args are injected as: mock_ssh_cls, mock_pause, mock_gen, mock_build, mock_gate_cls, mock_load.
+    Mock args are injected as: mock_ssh_cls, mock_pause, mock_gen, mock_build, mock_gate_cls,
+    mock_load.
     """
     func = unittest.mock.patch("terok.cli.commands.setup.SSHManager")(func)
     func = unittest.mock.patch("terok.cli.commands.setup.maybe_pause_for_ssh_key_registration")(
@@ -22,14 +30,22 @@ def _patch_init_steps[T](func: Callable[..., T]) -> Callable[..., T]:
     return func
 
 
-class ProjectInitTests(unittest.TestCase):
+def run_main(argv: list[str]) -> None:
+    """Run the CLI entrypoint with a patched ``sys.argv``."""
+    from terok.cli.main import main
+
+    with unittest.mock.patch("sys.argv", argv):
+        main()
+
+
+class TestProjectInit:
     """Tests for the project-init convenience command."""
 
     @_patch_init_steps
     def test_cmd_project_init_calls_four_steps(
         self, mock_ssh_cls, mock_pause, mock_gen, mock_build, mock_gate_cls, mock_load
     ) -> None:
-        mock_gate_cls.return_value.sync.return_value = {"success": True, "path": "/tmp/gate"}
+        mock_gate_cls.return_value.sync.return_value = {"success": True, "path": str(FAKE_GATE_DIR)}
 
         from terok.cli.commands.setup import cmd_project_init
 
@@ -52,14 +68,14 @@ class ProjectInitTests(unittest.TestCase):
         mock_build.side_effect = lambda *a, **kw: call_order.append("build")
         mock_gate_cls.return_value.sync.side_effect = lambda **kw: (
             call_order.append("gate"),
-            {"success": True, "path": "/tmp/gate"},
+            {"success": True, "path": str(FAKE_GATE_DIR)},
         )[-1]
 
         from terok.cli.commands.setup import cmd_project_init
 
         cmd_project_init("proj1")
 
-        self.assertEqual(call_order, ["ssh", "pause", "generate", "build", "gate"])
+        assert call_order == ["ssh", "pause", "generate", "build", "gate"]
 
     @_patch_init_steps
     def test_cmd_project_init_gate_failure_raises(
@@ -72,13 +88,12 @@ class ProjectInitTests(unittest.TestCase):
 
         from terok.cli.commands.setup import cmd_project_init
 
-        with self.assertRaises(SystemExit) as ctx:
+        with pytest.raises(SystemExit, match="Gate sync failed"):
             cmd_project_init("badproj")
-        self.assertIn("Gate sync failed", str(ctx.exception))
 
 
-class SshPauseTests(unittest.TestCase):
-    """Tests for the SSH key registration pause in maybe_pause_for_ssh_key_registration."""
+class TestSshPause:
+    """Tests for the SSH key registration pause helper."""
 
     @unittest.mock.patch("terok.lib.facade.load_project")
     @unittest.mock.patch("builtins.input", return_value="")
@@ -88,9 +103,7 @@ class SshPauseTests(unittest.TestCase):
         for upstream in ("git@github.com:org/repo.git", "ssh://github.com/org/repo.git"):
             mock_input.reset_mock()
             mock_load.return_value = unittest.mock.Mock(upstream_url=upstream)
-
             maybe_pause_for_ssh_key_registration("sshproj")
-
             mock_input.assert_called_once_with("Press Enter once the key is registered... ")
 
     @unittest.mock.patch("terok.lib.facade.load_project")
@@ -99,17 +112,14 @@ class SshPauseTests(unittest.TestCase):
         from terok.lib.facade import maybe_pause_for_ssh_key_registration
 
         mock_load.return_value = unittest.mock.Mock(upstream_url="https://github.com/org/repo.git")
-
         maybe_pause_for_ssh_key_registration("httpsproj")
-
         mock_input.assert_not_called()
 
     @_patch_init_steps
     def test_project_init_continues_after_pause(
         self, mock_ssh_cls, mock_pause, mock_gen, mock_build, mock_gate_cls, mock_load
     ) -> None:
-        """Verify generate/build/gate-sync all proceed after the pause step."""
-        mock_gate_cls.return_value.sync.return_value = {"success": True, "path": "/tmp/gate"}
+        mock_gate_cls.return_value.sync.return_value = {"success": True, "path": str(FAKE_GATE_DIR)}
 
         from terok.cli.commands.setup import cmd_project_init
 
@@ -122,116 +132,115 @@ class SshPauseTests(unittest.TestCase):
         mock_gate_cls.return_value.sync.assert_called_once()
 
 
-class TaskStartTests(unittest.TestCase):
-    """Tests for the 'task start' convenience command."""
+class TestTaskStart:
+    """Tests for task-start and related shorthand commands."""
 
-    @unittest.mock.patch("terok.cli.commands.task.task_run_cli")
-    @unittest.mock.patch("terok.cli.commands.task.task_new", return_value="42")
-    def test_task_start_cli_mode(self, mock_new, mock_run_cli) -> None:
-        from terok.cli.main import main
-
-        with unittest.mock.patch("sys.argv", ["terok", "task", "start", "proj1"]):
-            main()
-
-        mock_new.assert_called_once_with("proj1", name=None)
-        mock_run_cli.assert_called_once_with(
-            "proj1", "42", agents=None, preset=None, unrestricted=None
-        )
-
-    @unittest.mock.patch("terok.cli.commands.task.task_run_web")
-    @unittest.mock.patch("terok.cli.commands.task.task_new", return_value="7")
-    def test_task_start_web_mode(self, mock_new, mock_run_web) -> None:
-        from terok.cli.main import main
-
-        with unittest.mock.patch(
-            "sys.argv", ["terok", "--experimental", "task", "start", "proj2", "--web"]
-        ):
-            main()
-
-        mock_new.assert_called_once_with("proj2", name=None)
-        mock_run_web.assert_called_once_with(
-            "proj2", "7", backend=None, agents=None, preset=None, unrestricted=None
-        )
-
-    @unittest.mock.patch("terok.cli.commands.task.task_run_web")
-    @unittest.mock.patch("terok.cli.commands.task.task_new", return_value="3")
-    def test_task_start_web_with_backend(self, mock_new, mock_run_web) -> None:
-        from terok.cli.main import main
-
-        with unittest.mock.patch(
-            "sys.argv",
-            ["terok", "--experimental", "task", "start", "proj3", "--web", "--backend", "codex"],
-        ):
-            main()
-
-        mock_new.assert_called_once_with("proj3", name=None)
-        mock_run_web.assert_called_once_with(
-            "proj3", "3", backend="codex", agents=None, preset=None, unrestricted=None
-        )
-
-    @unittest.mock.patch("terok.cli.commands.task.task_run_toad")
-    @unittest.mock.patch("terok.cli.commands.task.task_new", return_value="10")
-    def test_task_start_toad_mode(self, mock_new, mock_run_toad) -> None:
-        from terok.cli.main import main
-
-        with unittest.mock.patch("sys.argv", ["terok", "task", "start", "proj1", "--toad"]):
-            main()
-
-        mock_new.assert_called_once_with("proj1", name=None)
-        mock_run_toad.assert_called_once_with(
-            "proj1", "10", agents=None, preset=None, unrestricted=None
-        )
-
-    def test_task_start_web_and_toad_mutually_exclusive(self) -> None:
-        """task start --web --toad should fail."""
-        from terok.cli.main import main
-
+    @pytest.mark.parametrize(
+        ("argv", "task_id", "runner_path", "expected_call"),
+        [
+            (
+                ["terok", "task", "start", "proj1"],
+                "42",
+                "terok.cli.commands.task.task_run_cli",
+                ("proj1", "42", {"agents": None, "preset": None, "unrestricted": None}),
+            ),
+            (
+                ["terok", "--experimental", "task", "start", "proj2", "--web"],
+                "7",
+                "terok.cli.commands.task.task_run_web",
+                (
+                    "proj2",
+                    "7",
+                    {"backend": None, "agents": None, "preset": None, "unrestricted": None},
+                ),
+            ),
+            (
+                [
+                    "terok",
+                    "--experimental",
+                    "task",
+                    "start",
+                    "proj3",
+                    "--web",
+                    "--backend",
+                    "codex",
+                ],
+                "3",
+                "terok.cli.commands.task.task_run_web",
+                (
+                    "proj3",
+                    "3",
+                    {
+                        "backend": "codex",
+                        "agents": None,
+                        "preset": None,
+                        "unrestricted": None,
+                    },
+                ),
+            ),
+            (
+                ["terok", "task", "start", "proj1", "--toad"],
+                "10",
+                "terok.cli.commands.task.task_run_toad",
+                ("proj1", "10", {"agents": None, "preset": None, "unrestricted": None}),
+            ),
+        ],
+        ids=["cli-mode", "web-mode", "web-mode-with-backend", "toad-mode"],
+    )
+    def test_task_start_dispatch(
+        self,
+        argv: list[str],
+        task_id: str,
+        runner_path: str,
+        expected_call: tuple[str, str, dict[str, object]],
+    ) -> None:
         with (
-            unittest.mock.patch("sys.argv", ["terok", "task", "start", "proj1", "--web", "--toad"]),
-            self.assertRaises(SystemExit),
+            unittest.mock.patch(
+                "terok.cli.commands.task.task_new", return_value=task_id
+            ) as mock_new,
+            unittest.mock.patch(runner_path) as mock_runner,
         ):
-            main()
+            run_main(argv)
+        project_id, expected_task_id, kwargs = expected_call
+        mock_new.assert_called_once_with(project_id, name=None)
+        mock_runner.assert_called_once_with(project_id, expected_task_id, **kwargs)
 
-    def test_task_start_web_requires_experimental(self) -> None:
-        """task start --web without --experimental should exit."""
-        from terok.cli.main import main
+    @pytest.mark.parametrize(
+        ("argv", "runner_path"),
+        [
+            (["terok", "task", "start", "proj1", "--web"], "terok.cli.commands.task.task_new"),
+            (["terok", "task", "run-web", "proj1", "1"], "terok.cli.commands.task.task_run_web"),
+        ],
+        ids=["task-start-web", "task-run-web"],
+    )
+    def test_experimental_flag_required(self, argv: list[str], runner_path: str) -> None:
+        with unittest.mock.patch(runner_path) as mock_runner:
+            with pytest.raises(SystemExit, match="--experimental"):
+                run_main(argv)
+        mock_runner.assert_not_called()
 
-        with (
-            unittest.mock.patch("terok.cli.commands.task.task_new", return_value="1") as mock_new,
-            unittest.mock.patch("sys.argv", ["terok", "task", "start", "proj1", "--web"]),
-            self.assertRaises(SystemExit) as ctx,
-        ):
-            main()
-        self.assertIn("--experimental", str(ctx.exception))
-        mock_new.assert_not_called()
-
-    @unittest.mock.patch("terok.cli.commands.task.task_run_web")
-    def test_task_run_web_requires_experimental(self, mock_run_web) -> None:
-        """task run-web without --experimental should exit."""
-        from terok.cli.main import main
-
-        with (
-            unittest.mock.patch("sys.argv", ["terok", "task", "run-web", "proj1", "1"]),
-            self.assertRaises(SystemExit) as ctx,
-        ):
-            main()
-        self.assertIn("--experimental", str(ctx.exception))
-        mock_run_web.assert_not_called()
-
-    @unittest.mock.patch("terok.cli.commands.setup.cmd_project_init")
-    def test_project_init_dispatch(self, mock_init) -> None:
-        from terok.cli.main import main
-
-        with unittest.mock.patch("sys.argv", ["terok", "project-init", "myproj"]):
-            main()
-
-        mock_init.assert_called_once_with("myproj")
-
-    @unittest.mock.patch("terok.cli.commands.task.task_login")
-    def test_login_dispatch(self, mock_login) -> None:
-        from terok.cli.main import main
-
-        with unittest.mock.patch("sys.argv", ["terok", "login", "proj1", "1"]):
-            main()
-
-        mock_login.assert_called_once_with("proj1", "1")
+    @pytest.mark.parametrize(
+        ("argv", "patch_target", "expected_call"),
+        [
+            (
+                ["terok", "project-init", "myproj"],
+                "terok.cli.commands.setup.cmd_project_init",
+                ("myproj",),
+            ),
+            (
+                ["terok", "login", "proj1", "1"],
+                "terok.cli.commands.task.task_login",
+                ("proj1", "1"),
+            ),
+        ],
+        ids=["project-init-dispatch", "login-dispatch"],
+    )
+    def test_simple_dispatch_commands(
+        self,
+        argv: list[str],
+        patch_target: str,
+        expected_call: tuple[str, ...],
+    ) -> None:
+        with unittest.mock.patch(patch_target) as mock_fn:
+            run_main(argv)
+        mock_fn.assert_called_once_with(*expected_call)

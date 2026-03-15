@@ -1,299 +1,252 @@
 # SPDX-FileCopyrightText: 2025 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-import unittest
-import unittest.mock
+from __future__ import annotations
+
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from unittest.mock import Mock, patch
+
+import pytest
 
 from terok.lib.containers.docker import build_images, generate_dockerfiles
 from terok.lib.core.config import build_root, set_experimental
 from terok.lib.core.images import base_dev_image
 from test_utils import mock_git_config, project_env
 
+UPSTREAM_URL = "https://example.com/repo.git"
+DEFAULT_BRANCH = "main"
 
-class DockerTests(unittest.TestCase):
-    def setUp(self) -> None:
-        set_experimental(True)
 
-    def tearDown(self) -> None:
-        set_experimental(False)
+@pytest.fixture(autouse=True)
+def experimental_enabled() -> Iterator[None]:
+    """Run Docker tests with experimental mode enabled unless overridden per test."""
+    set_experimental(True)
+    yield
+    set_experimental(False)
 
-    def test_generate_dockerfiles_outputs(self) -> None:
-        project_id = "proj4"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            out_dir = build_root() / project_id
-            l0 = out_dir / "L0.Dockerfile"
-            l1_cli = out_dir / "L1.cli.Dockerfile"
-            l1_ui = out_dir / "L1.ui.Dockerfile"
-            l2 = out_dir / "L2.Dockerfile"
 
-            self.assertTrue(l0.is_file())
-            self.assertTrue(l1_cli.is_file())
-            self.assertTrue(l1_ui.is_file())
-            self.assertTrue(l2.is_file())
+@contextmanager
+def docker_project(project_id: str, *, security_class: str = "online") -> Iterator[object]:
+    """Create a minimal project config suitable for Dockerfile generation tests."""
+    lines = [f"project:\n  id: {project_id}\n"]
+    if security_class != "online":
+        lines.append(f"  security_class: {security_class}\n")
+    lines.append("git:\n")
+    lines.append(f"  upstream_url: {UPSTREAM_URL}\n")
+    lines.append(f"  default_branch: {DEFAULT_BRANCH}\n")
+    yaml = "".join(lines)
+    with project_env(yaml, project_id=project_id) as env:
+        yield env
 
-            l0_content = l0.read_text(encoding="utf-8")
-            self.assertIn('LANG="en_US.UTF-8"', l0_content)
-            self.assertIn('LC_ALL="en_US.UTF-8"', l0_content)
-            self.assertIn('LANGUAGE="en_US:en"', l0_content)
-            self.assertIn("locales", l0_content)
-            self.assertIn("locale-gen en_US.UTF-8", l0_content)
 
-            content = l2.read_text(encoding="utf-8")
-            self.assertIn(f'SSH_KEY_NAME="id_ed25519_{project_id}"', content)
-            self.assertNotIn("{{DEFAULT_BRANCH}}", content)
+def build_commands(
+    project_id: str,
+    *,
+    image_exists: bool = True,
+    image_exists_side_effect: Callable[[str], bool] | None = None,
+    **build_kwargs: object,
+) -> list[list[str]]:
+    """Run ``build_images`` with Podman mocked and return captured build commands."""
+    commands: list[list[str]] = []
 
-            scripts_dir = out_dir / "scripts"
-            self.assertTrue(scripts_dir.is_dir())
-            script_files = [p for p in scripts_dir.iterdir() if p.is_file()]
-            self.assertTrue(script_files)
+    def mock_run(cmd: list[str], **_kwargs: object) -> Mock:
+        if "podman" in cmd and "build" in cmd:
+            commands.append(cmd)
+        return Mock(returncode=0)
 
-            # For online projects, CODE_REPO should default to upstream URL
-            self.assertIn('CODE_REPO="https://example.com/repo.git"', content)
+    image_exists_patch = (
+        patch("terok.lib.containers.docker._image_exists", side_effect=image_exists_side_effect)
+        if image_exists_side_effect is not None
+        else patch("terok.lib.containers.docker._image_exists", return_value=image_exists)
+    )
+    with (
+        patch("subprocess.run", side_effect=mock_run),
+        patch("terok.lib.containers.docker._check_podman_available"),
+        image_exists_patch,
+        mock_git_config(),
+    ):
+        build_images(project_id, **build_kwargs)
+    return commands
 
-    def test_generate_dockerfiles_gatekeeping_code_repo(self) -> None:
-        """For gatekeeping projects, CODE_REPO_DEFAULT should be the git-gate path."""
-        project_id = "proj_gated"
-        yaml = f"""\
-project:
-  id: {project_id}
-  security_class: gatekeeping
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            out_dir = build_root() / project_id
-            l2 = out_dir / "L2.Dockerfile"
 
-            content = l2.read_text(encoding="utf-8")
-            # For gatekeeping projects, CODE_REPO should default to git-gate
-            self.assertIn('CODE_REPO="file:///git-gate/gate.git"', content)
-            # Should NOT contain the real upstream URL as CODE_REPO
-            self.assertNotIn('CODE_REPO="https://example.com/repo.git"', content)
+def test_generate_dockerfiles_outputs_expected_files_and_content() -> None:
+    """Dockerfile generation writes all expected layers and helper scripts."""
+    project_id = "proj4"
+    with docker_project(project_id):
+        generate_dockerfiles(project_id)
+        out_dir = build_root() / project_id
 
-    def test_l1_cli_pipx_inject_has_env_vars(self) -> None:
-        """Verify that PIPX environment variables are set globally and pipx commands use them."""
-        project_id = "proj_pipx_test"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            out_dir = build_root() / project_id
-            l1_cli = out_dir / "L1.cli.Dockerfile"
+        assert all(
+            (out_dir / name).is_file()
+            for name in ("L0.Dockerfile", "L1.cli.Dockerfile", "L1.ui.Dockerfile", "L2.Dockerfile")
+        )
+        l0_content = (out_dir / "L0.Dockerfile").read_text(encoding="utf-8")
+        assert all(
+            token in l0_content
+            for token in (
+                'LANG="en_US.UTF-8"',
+                'LC_ALL="en_US.UTF-8"',
+                'LANGUAGE="en_US:en"',
+                "locales",
+                "locale-gen en_US.UTF-8",
+            )
+        )
+        l2_content = (out_dir / "L2.Dockerfile").read_text(encoding="utf-8")
+        assert f'SSH_KEY_NAME="id_ed25519_{project_id}"' in l2_content
+        assert "{{DEFAULT_BRANCH}}" not in l2_content
+        assert f'CODE_REPO="{UPSTREAM_URL}"' in l2_content
+        assert any(path.is_file() for path in (out_dir / "scripts").iterdir())
 
-            content = l1_cli.read_text(encoding="utf-8")
-            # Verify that PIPX_HOME and PIPX_BIN_DIR are set as ENV variables
-            self.assertIn("PIPX_HOME=/opt/pipx", content)
-            self.assertIn("PIPX_BIN_DIR=/usr/local/bin", content)
-            # Verify that pipx commands use these environment variables (no inline vars)
-            self.assertIn("pipx install mistral-vibe", content)
-            self.assertIn("pipx inject mistral-vibe mistralai", content)
 
-    def _run_build(
-        self,
-        project_id: str,
-        *,
-        image_exists: bool = True,
-        **build_kwargs: object,
-    ) -> list[list[str]]:
-        """Run build_images with mocked subprocess and return captured build commands."""
-        build_commands: list[list[str]] = []
+def test_generate_dockerfiles_uses_gatekeeping_code_repo() -> None:
+    """Gatekeeping projects clone from the local git gate instead of upstream."""
+    with docker_project("proj_gated", security_class="gatekeeping"):
+        generate_dockerfiles("proj_gated")
+        content = (build_root() / "proj_gated" / "L2.Dockerfile").read_text(encoding="utf-8")
+        assert 'CODE_REPO="file:///git-gate/gate.git"' in content
+        assert f'CODE_REPO="{UPSTREAM_URL}"' not in content
 
-        def mock_run(cmd: list[str], **kwargs: object) -> unittest.mock.Mock:
-            if isinstance(cmd, list) and "podman" in cmd and "build" in cmd:
-                build_commands.append(cmd)
-            result = unittest.mock.Mock()
-            result.returncode = 0
-            return result
 
-        with (
-            unittest.mock.patch("subprocess.run", side_effect=mock_run),
-            unittest.mock.patch("terok.lib.containers.docker._check_podman_available"),
-            unittest.mock.patch(
-                "terok.lib.containers.docker._image_exists",
-                return_value=image_exists,
-            ),
-            mock_git_config(),
-        ):
-            build_images(project_id, **build_kwargs)
+def test_l1_cli_pipx_inject_has_env_vars() -> None:
+    """The CLI image sets the expected pipx env vars and package installation lines."""
+    with docker_project("proj_pipx_test"):
+        generate_dockerfiles("proj_pipx_test")
+        content = (build_root() / "proj_pipx_test" / "L1.cli.Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        assert "PIPX_HOME=/opt/pipx" in content
+        assert "PIPX_BIN_DIR=/usr/local/bin" in content
+        assert "pipx install mistral-vibe" in content
+        assert "pipx inject mistral-vibe mistralai" in content
 
-        return build_commands
 
-    def test_build_images_l2_only_when_base_exists(self) -> None:
-        """Default build with existing L0/L1 should only build L2."""
-        project_id = "proj_build_test"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            cmds = self._run_build(project_id, image_exists=True)
+@pytest.mark.parametrize(
+    ("project_id", "capture_kwargs", "expected_count", "expected_suffixes"),
+    [
+        pytest.param(
+            "proj_build_test",
+            {"image_exists": True},
+            2,
+            ["L2.Dockerfile", "L2.Dockerfile"],
+            id="l2-only-when-base-exists",
+        ),
+        pytest.param(
+            "proj_build_auto",
+            {"image_exists": False},
+            5,
+            [
+                "L0.Dockerfile",
+                "L1.cli.Dockerfile",
+                "L1.ui.Dockerfile",
+                "L2.Dockerfile",
+                "L2.Dockerfile",
+            ],
+            id="auto-detect-missing-base",
+        ),
+    ],
+)
+def test_build_images_layer_selection(
+    project_id: str,
+    capture_kwargs: dict[str, object],
+    expected_count: int,
+    expected_suffixes: list[str],
+) -> None:
+    """Image building selects the expected Dockerfile layers."""
+    with docker_project(project_id):
+        generate_dockerfiles(project_id)
+        commands = build_commands(project_id, **capture_kwargs)
 
-            self.assertEqual(len(cmds), 2)
-            for cmd in cmds:
-                self.assertIn("L2.Dockerfile", " ".join(cmd))
+    assert len(commands) == expected_count
+    dockerfile_names = [
+        next(part for part in cmd if part.endswith(".Dockerfile")).rsplit("/", 1)[-1]
+        for cmd in commands
+    ]
+    assert dockerfile_names == expected_suffixes
 
-    def test_build_images_auto_detects_missing_base(self) -> None:
-        """Default build without existing L0/L1 should auto-build all layers."""
-        project_id = "proj_build_auto"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            cmds = self._run_build(project_id, image_exists=False)
 
-            # Should build all 5 images: L0, L1-cli, L1-ui, L2-cli, L2-ui
-            self.assertEqual(len(cmds), 5)
-            self.assertIn("L0.Dockerfile", " ".join(cmds[0]))
-            self.assertIn("L1.cli.Dockerfile", " ".join(cmds[1]))
-            self.assertIn("L1.ui.Dockerfile", " ".join(cmds[2]))
-            self.assertIn("L2.Dockerfile", " ".join(cmds[3]))
-            self.assertIn("L2.Dockerfile", " ".join(cmds[4]))
+def test_build_images_rebuild_agents_builds_all_layers() -> None:
+    """``rebuild_agents=True`` rebuilds the full stack and busts the agent cache."""
+    with docker_project("proj_build_agents"):
+        generate_dockerfiles("proj_build_agents")
+        commands = build_commands("proj_build_agents", image_exists=True, rebuild_agents=True)
 
-    def test_build_images_rebuild_agents(self) -> None:
-        """rebuild_agents=True should build all layers regardless of existence."""
-        project_id = "proj_build_agents"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            cmds = self._run_build(project_id, image_exists=True, rebuild_agents=True)
+    assert len(commands) == 5
+    assert "AGENT_CACHE_BUST" in " ".join(commands[1])
 
-            self.assertEqual(len(cmds), 5)
-            self.assertIn("L0.Dockerfile", " ".join(cmds[0]))
-            self.assertIn("L1.cli.Dockerfile", " ".join(cmds[1]))
-            self.assertIn("AGENT_CACHE_BUST", " ".join(cmds[1]))
-            self.assertIn("L1.ui.Dockerfile", " ".join(cmds[2]))
-            self.assertIn("L2.Dockerfile", " ".join(cmds[3]))
-            self.assertIn("L2.Dockerfile", " ".join(cmds[4]))
 
-    def test_build_images_full_rebuild(self) -> None:
-        """full_rebuild=True should build all layers with --no-cache."""
-        project_id = "proj_build_full"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            cmds = self._run_build(project_id, image_exists=True, full_rebuild=True)
+@pytest.mark.parametrize(
+    ("build_kwargs", "required_tokens"),
+    [
+        pytest.param({"full_rebuild": True}, ["--no-cache", "--pull=always"], id="full-rebuild"),
+        pytest.param({"include_dev": True}, [":l2-dev"], id="include-dev"),
+    ],
+)
+def test_build_images_applies_expected_flags(
+    build_kwargs: dict[str, object],
+    required_tokens: list[str],
+) -> None:
+    """Build flags are passed through to the rendered Podman build commands."""
+    with docker_project("proj_build_flags"):
+        generate_dockerfiles("proj_build_flags")
+        commands = build_commands("proj_build_flags", image_exists=True, **build_kwargs)
 
-            self.assertEqual(len(cmds), 5)
-            # L0 should have --no-cache and --pull=always
-            l0_cmd = " ".join(cmds[0])
-            self.assertIn("--no-cache", l0_cmd)
-            self.assertIn("--pull=always", l0_cmd)
-            # All other commands should have --no-cache
-            for cmd in cmds[1:]:
-                self.assertIn("--no-cache", " ".join(cmd))
+    rendered = [" ".join(cmd) for cmd in commands]
+    assert any(all(token in cmd for token in required_tokens) for cmd in rendered)
 
-    def test_build_images_auto_detect_l1_missing_only(self) -> None:
-        """When L0 exists but L1 is missing, should build all layers."""
-        project_id = "proj_build_l1miss"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
 
-            build_commands: list[list[str]] = []
+def test_build_images_auto_detects_missing_l1() -> None:
+    """Missing L1 layers trigger a rebuild of the whole stack."""
+    project_id = "proj_build_l1miss"
+    l0_image = base_dev_image("ubuntu:24.04")
 
-            def mock_run(cmd: list[str], **kwargs: object) -> unittest.mock.Mock:
-                if isinstance(cmd, list) and "podman" in cmd and "build" in cmd:
-                    build_commands.append(cmd)
-                result = unittest.mock.Mock()
-                result.returncode = 0
-                return result
+    def l0_exists_only(image: str) -> bool:
+        return image == l0_image
 
-            l0_image = base_dev_image("ubuntu:24.04")
+    with docker_project(project_id):
+        generate_dockerfiles(project_id)
+        commands = build_commands(project_id, image_exists_side_effect=l0_exists_only)
 
-            def l0_exists_only(image: str) -> bool:
-                # L0 exists, but L1 images do not
-                return image == l0_image
+    assert len(commands) == 5
 
-            with (
-                unittest.mock.patch("subprocess.run", side_effect=mock_run),
-                unittest.mock.patch("terok.lib.containers.docker._check_podman_available"),
-                unittest.mock.patch(
-                    "terok.lib.containers.docker._image_exists",
-                    side_effect=l0_exists_only,
-                ),
-                mock_git_config(),
-            ):
-                build_images(project_id)
 
-            # Should build all 5 images since L1 is missing
-            self.assertEqual(len(build_commands), 5)
-
-    def test_generate_dockerfiles_no_ui_without_experimental(self) -> None:
-        """Without experimental, L1.ui.Dockerfile should not be generated."""
-        set_experimental(False)
-        project_id = "proj_no_ui"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            out_dir = build_root() / project_id
-            self.assertTrue((out_dir / "L0.Dockerfile").is_file())
-            self.assertTrue((out_dir / "L1.cli.Dockerfile").is_file())
-            self.assertFalse((out_dir / "L1.ui.Dockerfile").is_file())
-            self.assertTrue((out_dir / "L2.Dockerfile").is_file())
-
-    def test_build_images_skips_web_without_experimental(self) -> None:
-        """Without experimental, build_images should only build CLI images (no web)."""
-        set_experimental(False)
-        project_id = "proj_build_noweb"
-        yaml = f"""\
-project:
-  id: {project_id}
-git:
-  upstream_url: https://example.com/repo.git
-  default_branch: main
-"""
-        with project_env(yaml, project_id=project_id):
-            generate_dockerfiles(project_id)
-            cmds = self._run_build(project_id, image_exists=True)
-
-            # Should only build 1 L2 image (CLI, no web)
-            self.assertEqual(len(cmds), 1)
-            self.assertIn("L2.Dockerfile", " ".join(cmds[0]))
+@pytest.mark.parametrize(
+    ("project_id", "expected_files", "expected_build_count"),
+    [
+        pytest.param(
+            "proj_no_ui",
+            {
+                "L0.Dockerfile": True,
+                "L1.cli.Dockerfile": True,
+                "L1.ui.Dockerfile": False,
+                "L2.Dockerfile": True,
+            },
+            None,
+            id="generate-without-ui",
+        ),
+        pytest.param(
+            "proj_build_noweb",
+            None,
+            1,
+            id="build-without-web",
+        ),
+    ],
+)
+def test_non_experimental_mode_skips_web_artifacts(
+    project_id: str,
+    expected_files: dict[str, bool] | None,
+    expected_build_count: int | None,
+) -> None:
+    """Disabling experimental mode omits UI/web layers during generation and build."""
+    set_experimental(False)
+    with docker_project(project_id):
+        generate_dockerfiles(project_id)
+        out_dir = build_root() / project_id
+        if expected_files is not None:
+            assert all(
+                (out_dir / name).exists() is exists for name, exists in expected_files.items()
+            )
+        if expected_build_count is not None:
+            commands = build_commands(project_id, image_exists=True)
+            assert len(commands) == expected_build_count
+            assert "L2.Dockerfile" in " ".join(commands[0])

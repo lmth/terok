@@ -1,99 +1,44 @@
 # SPDX-FileCopyrightText: 2025 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
-import unittest
-from unittest import mock
+"""Smoke tests for the TUI entry module and configuration bridge."""
 
-# Mock textual dependencies before importing the TUI module
-# This is necessary because the TUI module uses decorators that require textual
+from __future__ import annotations
 
+from pathlib import Path
 
-class MockMessage:
-    """Mock base for textual.message.Message."""
+import pytest
+from tui_test_helpers import import_app
 
-    pass
+from testmodule_utils import assert_module_callable
 
 
-class MockProjectSelected(MockMessage):
-    """Mock for ProjectList.ProjectSelected message."""
-
-    def __init__(self, project_id: str) -> None:
-        self.project_id = project_id
-
-
-class MockProjectList:
-    """Mock for widgets.ProjectList."""
-
-    ProjectSelected = MockProjectSelected
+def test_tui_main_is_callable() -> None:
+    """The TUI module exports a callable ``main`` entrypoint."""
+    import_app()
+    assert_module_callable("terok.tui.app")
 
 
-class MockTaskSelected(MockMessage):
-    """Mock for TaskList.TaskSelected message."""
+@pytest.mark.parametrize(
+    ("config_text", "expected"),
+    [
+        pytest.param(None, False, id="missing-config"),
+        pytest.param("tui:\n  default_tmux: true\n", True, id="tmux-enabled"),
+    ],
+)
+def test_tmux_configuration_integration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    config_text: str | None,
+    expected: bool,
+) -> None:
+    """The TUI module can read the ``tui.default_tmux`` configuration value."""
+    from terok.lib.core.config import get_tui_default_tmux
 
-    def __init__(self, task_id: str) -> None:
-        self.task_id = task_id
+    monkeypatch.delenv("TEROK_CONFIG_FILE", raising=False)
+    if config_text is not None:
+        cfg_path = tmp_path / "config.yml"
+        cfg_path.write_text(config_text, encoding="utf-8")
+        monkeypatch.setenv("TEROK_CONFIG_FILE", str(cfg_path))
 
-
-class MockTaskList:
-    """Mock for widgets.TaskList."""
-
-    TaskSelected = MockTaskSelected
-
-
-# Mock the @on decorator to just return the function unchanged
-def mock_on_decorator(*args, **kwargs):
-    def decorator(fn):
-        return fn
-
-    return decorator
-
-
-# Set up textual mocks
-_textual_mock = mock.MagicMock()
-_textual_mock.on = mock_on_decorator
-sys.modules["textual"] = _textual_mock
-sys.modules["textual.app"] = mock.MagicMock()
-sys.modules["textual.widgets"] = mock.MagicMock()
-sys.modules["textual.containers"] = mock.MagicMock()
-sys.modules["textual.message"] = mock.MagicMock()
-
-# Mock the widgets module with our mock classes
-_widgets_mock = mock.MagicMock()
-_widgets_mock.ProjectList = MockProjectList
-_widgets_mock.TaskList = MockTaskList
-sys.modules["terok.tui.widgets"] = _widgets_mock
-
-
-class TuiModuleTests(unittest.TestCase):
-    def test_tui_main_is_callable(self) -> None:
-        import importlib
-
-        # Need to reload if already imported
-        if "terok.tui.app" in sys.modules:
-            del sys.modules["terok.tui.app"]
-        if "terok.tui" in sys.modules:
-            del sys.modules["terok.tui"]
-
-        module = importlib.import_module("terok.tui.app")
-        self.assertTrue(callable(getattr(module, "main", None)))
-
-    def test_tmux_configuration_integration(self) -> None:
-        """Test that the TUI module can import and use the tmux configuration function."""
-        # Test that we can import the configuration function
-        from terok.lib.core.config import get_tui_default_tmux
-
-        # Test that it returns False by default
-        self.assertFalse(get_tui_default_tmux())
-
-        # Test with a temporary config file
-        import os
-        import tempfile
-        from pathlib import Path
-
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = Path(td) / "config.yml"
-            cfg_path.write_text("tui:\n  default_tmux: true\n", encoding="utf-8")
-
-            with unittest.mock.patch.dict(os.environ, {"TEROK_CONFIG_FILE": str(cfg_path)}):
-                self.assertTrue(get_tui_default_tmux())
+    assert get_tui_default_tmux() is expected

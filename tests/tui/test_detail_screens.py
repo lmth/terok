@@ -5,28 +5,156 @@
 
 import asyncio
 import contextlib
+import inspect
 import sys
-from unittest import TestCase, main, mock
+from collections.abc import Callable
+from unittest import mock
 
+import pytest
 from rich.text import Text
 from tui_test_helpers import import_app, import_screens, import_widgets, make_key_event
 
-from testfs import MOCK_BASE
+from testfs import MOCK_BASE, MOCK_CONFIG_ROOT
+from testnet import GATE_PORT, TEST_EGRESS_URL, TEST_UPSTREAM_URL
 
 MOCK_WORKSPACE = str(MOCK_BASE / "ws")
+TEST_PROJECT_ID = "test-proj"
+TEST_PROJECT_ROOT = MOCK_CONFIG_ROOT / "projects" / TEST_PROJECT_ID
 
 
-class RenderHelpersTests(TestCase):
+def make_project(**overrides: object) -> mock.Mock:
+    """Return a project mock with sensible defaults for TUI rendering tests."""
+    project = mock.Mock()
+    project.id = TEST_PROJECT_ID
+    project.upstream_url = TEST_UPSTREAM_URL
+    project.security_class = "online"
+    project.agents = ["codex"]
+    project.agent_config = {}
+    project.root = TEST_PROJECT_ROOT
+    for key, value in overrides.items():
+        setattr(project, key, value)
+    return project
+
+
+def make_task(widgets: object, **overrides: object) -> object:
+    """Build a TaskMeta with defaults tuned for these tests."""
+    defaults = {
+        "task_id": "1",
+        "mode": "cli",
+        "workspace": MOCK_WORKSPACE,
+        "web_port": None,
+        "container_state": "running",
+    }
+    return widgets.TaskMeta(**(defaults | overrides))
+
+
+def make_task_screen(*, has_tasks: bool, mode: str | None = None) -> object:
+    """Build a TaskDetailsScreen with a mocked dismiss method."""
+    screens, widgets = import_screens()
+    task = None if mode is None else make_task(widgets, task_id="t1", mode=mode)
+    screen = screens.TaskDetailsScreen(task=task, has_tasks=has_tasks, project_id="p")
+    screen.dismiss = mock.Mock()
+    return screen
+
+
+def render_task_details_text(**overrides: object) -> str:
+    """Render task details and return plain text for substring assertions."""
+    widgets = import_widgets()
+    task = make_task(widgets, **overrides)
+    return str(widgets.render_task_details(task, project_id="proj1"))
+
+
+def format_task_label(**overrides: object) -> str:
+    """Format a task label using the shared TaskMeta defaults."""
+    widgets = import_widgets()
+    return widgets.TaskList()._format_task_label(make_task(widgets, **overrides))
+
+
+def run(coro: object) -> object:
+    """Run an async test coroutine."""
+    return asyncio.run(coro)
+
+
+def assert_rendered_needles(text: str, present: list[str], absent: list[str]) -> None:
+    """Assert that required needles are present and forbidden ones absent."""
+    for needle in present:
+        assert needle in text
+    for needle in absent:
+        assert needle not in text
+
+
+async def fake_push_screen(
+    _screen: object,
+    callback: Callable[[str], object],
+) -> None:
+    """Simulate a modal that immediately returns a generated task name."""
+    result = callback("test-name")
+    if inspect.isawaitable(result):
+        await result
+
+
+def make_creation_app(app_class: type) -> object:
+    """Build a TUI app instance prepared for task-creation workflows."""
+    instance = app_class()
+    instance.current_project_id = "proj1"
+    instance._last_selected_tasks = {}
+    instance.notify = mock.Mock()
+    instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
+    instance._save_selection_state = mock.Mock()
+    instance.refresh_tasks = mock.AsyncMock()
+    instance.push_screen = fake_push_screen
+    return instance
+
+
+def make_sync_gate_app(app_class: type) -> object:
+    """Build a TUI app instance prepared for gate-sync workflows."""
+    instance = app_class()
+    instance.current_project_id = "proj1"
+    instance.notify = mock.Mock()
+    instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
+    instance._print_sync_gate_ssh_help = mock.Mock()
+    instance._refresh_project_state = mock.Mock()
+    return instance
+
+
+def make_gate_server_status(
+    *, mode: str = "systemd", running: bool = True, port: int = GATE_PORT
+) -> mock.Mock:
+    """Build a gate-server status mock with common defaults."""
+    status = mock.Mock()
+    status.mode = mode
+    status.running = running
+    status.port = port
+    return status
+
+
+def _task_action_cases() -> list[tuple[str, str]]:
+    app_mod, _ = import_app()
+    return list(app_mod.TASK_ACTION_HANDLERS.items())
+
+
+def _auth_providers() -> list[str]:
+    from terok.lib.security.auth import AUTH_PROVIDERS
+
+    return list(AUTH_PROVIDERS)
+
+
+def _project_action_cases() -> list[tuple[str, str]]:
+    app_mod, _ = import_app()
+    return list(app_mod.PROJECT_ACTION_HANDLERS.items())
+
+
+def _gate_server_action_cases() -> list[tuple[str, str]]:
+    app_mod, _ = import_app()
+    return list(app_mod.GATE_SERVER_ACTION_HANDLERS.items())
+
+
+class TestRenderHelpers:
     """Tests for the extracted render_* helper functions."""
 
     def test_render_project_details_returns_text(self) -> None:
         widgets = import_widgets()
-
-        project = mock.Mock()
-        project.id = "test-proj"
-        project.upstream_url = "https://example.com/repo.git"
-        project.security_class = "online"
-        project.agents = ["codex"]
+        project = make_project()
         state = {
             "ssh": True,
             "dockerfiles": True,
@@ -36,301 +164,216 @@ class RenderHelpersTests(TestCase):
 
         result = widgets.render_project_details(project, state, task_count=5)
 
-        self.assertIsInstance(result, Text)
+        assert isinstance(result, Text)
         text_str = str(result)
-        self.assertIn("test-proj", text_str)
+        assert TEST_PROJECT_ID in text_str
 
     def test_render_project_details_shows_config_path(self) -> None:
         widgets = import_widgets()
-
-        from pathlib import Path
-
-        project = mock.Mock()
-        project.id = "test-proj"
-        project.upstream_url = "https://example.com/repo.git"
-        project.security_class = "online"
-        project.root = Path("/home/user/.config/terok/projects/test-proj")
-        project.agent_config = {}
+        project = make_project()
         state = {"ssh": True, "dockerfiles": True, "images": True, "gate": True}
 
         result = widgets.render_project_details(project, state, task_count=5)
         text_str = str(result)
-        self.assertIn("Config: /home/user/.config/terok/projects/test-proj", text_str)
+        assert f"Config: {TEST_PROJECT_ROOT}" in text_str
 
     def test_render_project_details_none_project(self) -> None:
         widgets = import_widgets()
 
         result = widgets.render_project_details(None, None)
 
-        self.assertIsInstance(result, Text)
-        self.assertIn("No project", str(result))
+        assert isinstance(result, Text)
+        assert "No project" in str(result)
 
     def test_render_task_details_returns_text(self) -> None:
         widgets = import_widgets()
 
-        task = widgets.TaskMeta(
-            task_id="42",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            backend="codex",
-            container_state="running",
-        )
+        task = make_task(widgets, task_id="42", backend="codex")
 
         result = widgets.render_task_details(task, project_id="proj1")
 
-        self.assertIsInstance(result, Text)
+        assert isinstance(result, Text)
         text_str = str(result)
-        self.assertIn("42", text_str)
+        assert "42" in text_str
 
     def test_render_task_details_none_shows_empty_message(self) -> None:
         widgets = import_widgets()
 
         result = widgets.render_task_details(None, empty_message="Nothing here")
 
-        self.assertIsInstance(result, Text)
-        self.assertIn("Nothing here", str(result))
+        assert isinstance(result, Text)
+        assert "Nothing here" in str(result)
 
     def test_render_project_loading(self) -> None:
         widgets = import_widgets()
-
-        project = mock.Mock()
-        project.id = "myproj"
-        project.upstream_url = "https://example.com"
-        project.security_class = "online"
+        project = make_project(id="myproj", upstream_url=TEST_EGRESS_URL)
 
         result = widgets.render_project_loading(project, task_count=3)
 
-        self.assertIsInstance(result, Text)
+        assert isinstance(result, Text)
         text_str = str(result)
-        self.assertIn("myproj", text_str)
+        assert "myproj" in text_str
 
     def test_render_project_loading_none_project(self) -> None:
         widgets = import_widgets()
 
         result = widgets.render_project_loading(None)
 
-        self.assertIsInstance(result, Text)
-        self.assertIn("No project", str(result))
+        assert isinstance(result, Text)
+        assert "No project" in str(result)
 
     def test_render_task_details_autopilot_mode(self) -> None:
         widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="5",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-        )
+        task = make_task(widgets, task_id="5", mode="run")
         result = widgets.render_task_details(task, project_id="proj1")
-        self.assertIsInstance(result, Text)
+        assert isinstance(result, Text)
         text_str = str(result)
-        self.assertIn("Autopilot", text_str)
-        self.assertIn("terokctl task logs", text_str)
+        assert "Autopilot" in text_str
+        assert "terokctl task logs" in text_str
 
     def test_render_task_details_autopilot_with_exit_code(self) -> None:
         widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="5",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            exit_code=0,
-        )
+        task = make_task(widgets, task_id="5", mode="run", exit_code=0)
         result = widgets.render_task_details(task, project_id="proj1")
         text_str = str(result)
-        self.assertIn("Exit code: 0", text_str)
+        assert "Exit code: 0" in text_str
 
-    def test_render_task_details_with_work_status(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="10",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            work_status="coding",
-            work_message="Implementing JWT validation",
+    @pytest.mark.parametrize(
+        ("overrides", "present", "absent"),
+        [
+            pytest.param(
+                {
+                    "task_id": "10",
+                    "mode": "run",
+                    "work_status": "coding",
+                    "work_message": "Implementing JWT validation",
+                },
+                ["Work:", "coding", "Implementing JWT validation"],
+                [],
+                id="work-status-with-message",
+            ),
+            pytest.param(
+                {"task_id": "11", "mode": "run", "work_status": "testing"},
+                ["Work:", "testing"],
+                [],
+                id="work-status-no-message",
+            ),
+            pytest.param(
+                {"task_id": "12", "mode": "cli"},
+                [],
+                ["Work:"],
+                id="no-work-status",
+            ),
+        ],
+    )
+    def test_render_task_details_work_status_variants(
+        self, overrides: dict[str, object], present: list[str], absent: list[str]
+    ) -> None:
+        assert_rendered_needles(render_task_details_text(**overrides), present, absent)
+
+    @pytest.mark.parametrize(
+        ("overrides", "present", "absent"),
+        [
+            pytest.param(
+                {"task_id": "20", "mode": "run", "unrestricted": True},
+                ["Perms:     unrestricted"],
+                [],
+                id="unrestricted",
+            ),
+            pytest.param(
+                {"task_id": "21", "mode": "run", "unrestricted": False},
+                ["Perms:     restricted"],
+                ["Perms:     unrestricted"],
+                id="restricted",
+            ),
+        ],
+    )
+    def test_render_task_details_permission_variants(
+        self, overrides: dict[str, object], present: list[str], absent: list[str]
+    ) -> None:
+        assert_rendered_needles(render_task_details_text(**overrides), present, absent)
+
+    @pytest.mark.parametrize(
+        ("shield_state", "present", "absent"),
+        [
+            pytest.param(
+                "DISABLED",
+                ["Shield:", "disabled", "shield-security"],
+                [],
+                id="disabled",
+            ),
+            pytest.param(
+                "INACTIVE",
+                ["inactive", "shield-security"],
+                [],
+                id="inactive",
+            ),
+            pytest.param(
+                "UP",
+                ["up"],
+                ["shield-security"],
+                id="up",
+            ),
+        ],
+    )
+    def test_render_task_details_shield_variants(
+        self, shield_state: str, present: list[str], absent: list[str]
+    ) -> None:
+        assert_rendered_needles(
+            render_task_details_text(task_id="99", shield_state=shield_state),
+            present,
+            absent,
         )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("Work:", text_str)
-        self.assertIn("coding", text_str)
-        self.assertIn("Implementing JWT validation", text_str)
 
-    def test_render_task_details_work_status_without_message(self) -> None:
+    @pytest.mark.parametrize(
+        ("overrides", "present", "absent"),
+        [
+            pytest.param(
+                {"task_id": "13", "mode": "run", "work_status": "debugging"},
+                ["work=debugging"],
+                [],
+                id="with-work-status",
+            ),
+            pytest.param(
+                {"task_id": "14", "mode": "cli"},
+                [],
+                ["work="],
+                id="without-work-status",
+            ),
+            pytest.param(
+                {"task_id": "3", "mode": "run"},
+                ["🚀"],
+                [],
+                id="autopilot",
+            ),
+        ],
+    )
+    def test_format_task_label_variants(
+        self, overrides: dict[str, object], present: list[str], absent: list[str]
+    ) -> None:
+        assert_rendered_needles(format_task_label(**overrides), present, absent)
+
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [
+            pytest.param({"task_id": "1", "mode": "run", "exit_code": 1}, 1, id="explicit-exit"),
+            pytest.param({"task_id": "1", "mode": "cli"}, None, id="default-none"),
+        ],
+    )
+    def test_task_meta_exit_code_variants(
+        self, overrides: dict[str, object], expected: int | None
+    ) -> None:
         widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="11",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            work_status="testing",
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("Work:", text_str)
-        self.assertIn("testing", text_str)
-
-    def test_render_task_details_no_work_status(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="12",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertNotIn("Work:", text_str)
-
-    def test_render_task_details_unrestricted(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="20",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            unrestricted=True,
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("Perms:     unrestricted", text_str)
-
-    def test_render_task_details_restricted(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="21",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            unrestricted=False,
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("Perms:     restricted", text_str)
-        self.assertNotIn("Perms:     unrestricted", text_str)
-
-    def test_render_task_details_shield_disabled(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="99",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            shield_state="DISABLED",
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("Shield:", text_str)
-        self.assertIn("disabled", text_str)
-        self.assertIn("shield-security", text_str)
-
-    def test_render_task_details_shield_inactive_shows_hint(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="98",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            shield_state="INACTIVE",
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("inactive", text_str)
-        self.assertIn("shield-security", text_str)
-
-    def test_render_task_details_shield_up_no_hint(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="97",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            shield_state="UP",
-        )
-        result = widgets.render_task_details(task, project_id="proj1")
-        text_str = str(result)
-        self.assertIn("up", text_str)
-        self.assertNotIn("shield-security", text_str)
-
-    def test_format_task_label_with_work_status(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="13",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-            work_status="debugging",
-        )
-        task_list = widgets.TaskList()
-        label = task_list._format_task_label(task)
-        self.assertIn("work=debugging", label)
-
-    def test_format_task_label_no_work_status(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="14",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-        )
-        task_list = widgets.TaskList()
-        label = task_list._format_task_label(task)
-        self.assertNotIn("work=", label)
-
-    def test_format_task_label_autopilot(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="3",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-        )
-        task_list = widgets.TaskList()
-        label = task_list._format_task_label(task)
-        self.assertIn("🚀", label)
-
-    def test_task_meta_exit_code_field(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="1",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            exit_code=1,
-        )
-        self.assertEqual(task.exit_code, 1)
-
-    def test_task_meta_exit_code_default_none(self) -> None:
-        widgets = import_widgets()
-        task = widgets.TaskMeta(
-            task_id="1",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-        )
-        self.assertIsNone(task.exit_code)
+        task = make_task(widgets, **overrides)
+        assert task.exit_code == expected
 
 
-class ScreenConstructionTests(TestCase):
+class TestScreenConstruction:
     """Tests that screen classes can be instantiated with correct arguments."""
 
     def test_project_details_screen_construction(self) -> None:
         screens, _ = import_screens()
-
-        project = mock.Mock()
-        project.id = "proj1"
+        project = make_project(id="proj1")
         staleness = mock.Mock()
 
         screen = screens.ProjectDetailsScreen(
@@ -339,22 +382,14 @@ class ScreenConstructionTests(TestCase):
             task_count=5,
             staleness=staleness,
         )
-        self.assertEqual(screen._project, project)
-        self.assertEqual(screen._state, {"ssh": True})
-        self.assertEqual(screen._task_count, 5)
-        self.assertEqual(screen._staleness, staleness)
+        assert screen._project == project
+        assert screen._state == {"ssh": True}
+        assert screen._task_count == 5
+        assert screen._staleness == staleness
 
     def test_task_details_screen_construction(self) -> None:
         screens, widgets = import_screens()
-
-        task = widgets.TaskMeta(
-            task_id="7",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            backend="codex",
-            container_state="running",
-        )
+        task = make_task(widgets, task_id="7", backend="codex")
 
         screen = screens.TaskDetailsScreen(
             task=task,
@@ -362,33 +397,27 @@ class ScreenConstructionTests(TestCase):
             project_id="proj1",
             image_old=False,
         )
-        self.assertEqual(screen._task_meta, task)
-        self.assertTrue(screen._has_tasks)
-        self.assertEqual(screen._project_id, "proj1")
-        self.assertFalse(screen._image_old)
+        assert screen._task_meta == task
+        assert screen._has_tasks
+        assert screen._project_id == "proj1"
+        assert not screen._image_old
 
-    def test_auth_actions_screen_construction(self) -> None:
+    @pytest.mark.parametrize("screen_name", ["AuthActionsScreen", "AutopilotPromptScreen"])
+    def test_simple_screen_construction(self, screen_name: str) -> None:
         screens, _ = import_screens()
-
-        screen = screens.AuthActionsScreen()
-        self.assertIsNotNone(screen)
-
-    def test_autopilot_prompt_screen_construction(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.AutopilotPromptScreen()
-        self.assertIsNotNone(screen)
+        assert getattr(screens, screen_name)() is not None
 
     def test_agent_selection_screen_construction(self) -> None:
         screens, _ = import_screens()
         screen = screens.AgentSelectionScreen()
-        self.assertIsNotNone(screen)
-        self.assertEqual(screen._default_agent, "claude")
-        self.assertEqual(screen._subagents, [])
+        assert screen is not None
+        assert screen._default_agent == "claude"
+        assert screen._subagents == []
 
     def test_agent_selection_screen_custom_default(self) -> None:
         screens, _ = import_screens()
         screen = screens.AgentSelectionScreen(default_agent="codex")
-        self.assertEqual(screen._default_agent, "codex")
+        assert screen._default_agent == "codex"
 
     def test_agent_selection_screen_with_subagents(self) -> None:
         screens, _ = import_screens()
@@ -397,21 +426,21 @@ class ScreenConstructionTests(TestCase):
             {"name": "debugger", "description": "Debugger", "default": False},
         ]
         screen = screens.AgentSelectionScreen(subagents=subagents)
-        self.assertIsNotNone(screen)
-        self.assertEqual(len(screen._subagents), 2)
+        assert screen is not None
+        assert len(screen._subagents) == 2
 
     def test_agent_selection_screen_no_subagents(self) -> None:
         screens, _ = import_screens()
         screen = screens.AgentSelectionScreen(subagents=None)
-        self.assertIsNotNone(screen)
-        self.assertEqual(screen._subagents, [])
+        assert screen is not None
+        assert screen._subagents == []
 
     def test_agent_selection_screen_invalid_default_falls_back(self) -> None:
         screens, _ = import_screens()
         screen = screens.AgentSelectionScreen(default_agent="nonexistent")
         # Should fall back to first registered provider, not keep invalid name
-        self.assertNotEqual(screen._default_agent, "nonexistent")
-        self.assertEqual(screen._selected_agent, screen._default_agent)
+        assert screen._default_agent != "nonexistent"
+        assert screen._selected_agent == screen._default_agent
 
     def test_agent_selection_screen_cancel_dismisses_none(self) -> None:
         screens, _ = import_screens()
@@ -428,9 +457,9 @@ class ScreenConstructionTests(TestCase):
         screen._submit()
         screen.dismiss.assert_called_once()
         result = screen.dismiss.call_args[0][0]
-        self.assertIsInstance(result, tuple)
-        self.assertEqual(result[0], "codex")
-        self.assertIsNone(result[1])
+        assert isinstance(result, tuple)
+        assert result[0] == "codex"
+        assert result[1] is None
 
     def test_agent_selection_screen_number_key_updates_selection(self) -> None:
         screens, _ = import_screens()
@@ -442,30 +471,55 @@ class ScreenConstructionTests(TestCase):
         event.character = "2"
         screen.on_key(event)
         # Agent should have changed from default
-        self.assertNotEqual(screen._selected_agent, "claude")
+        assert screen._selected_agent != "claude"
         event.stop.assert_called_once()
 
 
-class TaskScreenKeyBindingTests(TestCase):
+class TestTaskScreenKeyBinding:
     """Tests for TaskDetailsScreen.on_key case-sensitive dispatch."""
 
-    def test_shift_n_dismisses_task_start_cli(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("N")
+    @pytest.mark.parametrize(
+        ("key", "has_tasks", "expected", "mode", "should_stop"),
+        [
+            pytest.param("N", False, "task_start_cli", None, True, id="shift-n"),
+            pytest.param("A", False, "task_start_autopilot", None, True, id="shift-a"),
+            pytest.param("C", False, "new", None, None, id="shift-c"),
+            pytest.param("H", True, "diff_head", None, None, id="shift-h"),
+            pytest.param("P", True, "diff_prev", None, None, id="shift-p"),
+            pytest.param("X", True, "delete", None, None, id="shift-x"),
+            pytest.param("c", True, "cli", None, None, id="lower-c"),
+            pytest.param("r", True, "restart", None, None, id="lower-r"),
+            pytest.param("D", True, "shield_down", None, None, id="shift-d"),
+            pytest.param("s", True, "shield_up", None, None, id="lower-s"),
+            pytest.param("escape", False, None, None, None, id="escape"),
+            pytest.param("q", False, None, None, None, id="q"),
+            pytest.param("f", True, "follow_logs", "run", None, id="follow-autopilot"),
+            pytest.param("f", True, "follow_logs", "cli", None, id="follow-cli"),
+        ],
+    )
+    def test_key_dispatch(
+        self,
+        key: str,
+        has_tasks: bool,
+        expected: str | None,
+        mode: str | None,
+        should_stop: bool | None,
+    ) -> None:
+        screen = make_task_screen(has_tasks=has_tasks, mode=mode)
+        event = make_key_event(key)
         screen.on_key(event)
-        screen.dismiss.assert_called_once_with("task_start_cli")
-        event.stop.assert_called_once()
+        screen.dismiss.assert_called_once_with(expected)
+        if should_stop is True:
+            event.stop.assert_called_once()
+        elif should_stop is False:
+            event.stop.assert_not_called()
 
     def test_shift_w_dismisses_task_start_web(self) -> None:
         from terok.lib.core.config import set_experimental
 
         set_experimental(True)
         try:
-            screens, _ = import_screens()
-            screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-            screen.dismiss = mock.Mock()
+            screen = make_task_screen(has_tasks=False)
             event = make_key_event("W")
             screen.on_key(event)
             screen.dismiss.assert_called_once_with("task_start_web")
@@ -478,214 +532,35 @@ class TaskScreenKeyBindingTests(TestCase):
         previous = is_experimental()
         set_experimental(False)
         try:
-            screens, _ = import_screens()
-            screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-            screen.dismiss = mock.Mock()
+            screen = make_task_screen(has_tasks=False)
             event = make_key_event("W")
             screen.on_key(event)
             screen.dismiss.assert_not_called()
         finally:
             set_experimental(previous)
 
-    def test_shift_c_dismisses_new_always(self) -> None:
-        screens, _ = import_screens()
-        # C should work even when has_tasks=False
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("C")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("new")
-
-    def test_shift_h_blocked_without_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("H")
-        screen.on_key(event)
-        screen.dismiss.assert_not_called()
-
-    def test_shift_h_works_with_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("H")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("diff_head")
-
-    def test_shift_p_works_with_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("P")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("diff_prev")
-
-    def test_lowercase_d_blocked_without_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("d")
-        screen.on_key(event)
-        screen.dismiss.assert_not_called()
-
-    def test_shift_x_works_with_tasks(self) -> None:
-        """Shift-X triggers delete (remapped from d)."""
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("X")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("delete")
-
-    def test_lowercase_c_works_with_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("c")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("cli")
-
     def test_lowercase_w_dispatches_toad(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
+        screen = make_task_screen(has_tasks=True)
         event = make_key_event("w")
         screen.on_key(event)
         screen.dismiss.assert_called_once_with("toad")
 
-    def test_uppercase_w_dispatches_task_start_web_with_experimental(self) -> None:
-        from terok.lib.core.config import is_experimental, set_experimental
-
-        previous = is_experimental()
-        set_experimental(True)
-        try:
-            screens, _ = import_screens()
-            screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-            screen.dismiss = mock.Mock()
-            event = make_key_event("W")
-            screen.on_key(event)
-            screen.dismiss.assert_called_once_with("task_start_web")
-        finally:
-            set_experimental(previous)
-
-    def test_lowercase_r_works_with_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("r")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("restart")
-
-    def test_shift_d_shield_down_with_tasks(self) -> None:
-        """Shift-D triggers shield_down action."""
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("D")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("shield_down")
-
-    def test_shift_d_blocked_without_tasks(self) -> None:
-        """Shift-D is a no-op without tasks."""
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("D")
+    @pytest.mark.parametrize("key", ["H", "d", "D", "s", "f"])
+    def test_task_only_keys_are_blocked_without_tasks(self, key: str) -> None:
+        screen = make_task_screen(has_tasks=False)
+        event = make_key_event(key)
         screen.on_key(event)
         screen.dismiss.assert_not_called()
-
-    def test_lowercase_s_shield_up_with_tasks(self) -> None:
-        """Lowercase s triggers shield_up action."""
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("s")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("shield_up")
-
-    def test_lowercase_s_blocked_without_tasks(self) -> None:
-        """Lowercase s is a no-op without tasks."""
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("s")
-        screen.on_key(event)
-        screen.dismiss.assert_not_called()
-
-    def test_escape_dismisses_none(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("escape")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with(None)
-
-    def test_q_dismisses_none(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("q")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with(None)
 
     def test_unmapped_key_does_nothing(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
+        screen = make_task_screen(has_tasks=True)
         event = make_key_event("x")
         screen.on_key(event)
         screen.dismiss.assert_not_called()
         event.stop.assert_not_called()
 
-    def test_shift_a_dismisses_task_start_autopilot(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("A")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("task_start_autopilot")
-        event.stop.assert_called_once()
 
-    def test_lowercase_f_works_with_autopilot_task(self) -> None:
-        screens, widgets = import_screens()
-        task = widgets.TaskMeta(
-            task_id="t1",
-            mode="run",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-        )
-        screen = screens.TaskDetailsScreen(task=task, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("f")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("follow_logs")
-
-    def test_lowercase_f_works_for_non_autopilot_task(self) -> None:
-        screens, widgets = import_screens()
-        task = widgets.TaskMeta(
-            task_id="t1",
-            mode="cli",
-            workspace=MOCK_WORKSPACE,
-            web_port=None,
-            container_state="running",
-        )
-        screen = screens.TaskDetailsScreen(task=task, has_tasks=True, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("f")
-        screen.on_key(event)
-        screen.dismiss.assert_called_once_with("follow_logs")
-
-    def test_lowercase_f_blocked_without_tasks(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.TaskDetailsScreen(task=None, has_tasks=False, project_id="p")
-        screen.dismiss = mock.Mock()
-        event = make_key_event("f")
-        screen.on_key(event)
-        screen.dismiss.assert_not_called()
-
-
-class AuthScreenOptionsTests(TestCase):
+class TestAuthScreenOptions:
     """Tests that AuthActionsScreen includes the import option."""
 
     def test_auth_screen_has_import_opencode_option(self) -> None:
@@ -720,7 +595,7 @@ class AuthScreenOptionsTests(TestCase):
         """Verify OpenCodeConfigScreen can be instantiated."""
         screens, _ = import_screens()
         screen = screens.OpenCodeConfigScreen()
-        self.assertIsNotNone(screen)
+        assert screen is not None
 
     def test_opencode_config_screen_cancel(self) -> None:
         """Verify cancel action dismisses with None."""
@@ -731,111 +606,81 @@ class AuthScreenOptionsTests(TestCase):
         screen.dismiss.assert_called_once_with(None)
 
 
-class ActionDispatchTests(TestCase):
+class TestActionDispatch:
     """Tests for action dispatch routing in the app."""
 
     def test_project_action_dispatch_project_init(self) -> None:
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
 
-        coro = AppClass._handle_project_action(instance, "project_init")
-        asyncio.run(coro)
+        run(app_class._handle_project_action(instance, "project_init"))
 
         instance._action_project_init.assert_called_once()
 
-    def test_project_action_dispatch_auth_providers(self) -> None:
+    @pytest.mark.parametrize("provider", _auth_providers())
+    def test_project_action_dispatch_auth_providers(self, provider: str) -> None:
         """Auth dispatch extracts the provider name from the action string."""
-        from terok.lib.security.auth import AUTH_PROVIDERS
-
-        app_mod, AppClass = import_app()
-
-        for provider in AUTH_PROVIDERS:
-            with self.subTest(provider=provider):
-                instance = mock.Mock(spec=AppClass)
-                coro = AppClass._handle_project_action(instance, f"auth_{provider}")
-                asyncio.run(coro)
-                instance._action_auth.assert_called_once_with(provider)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class._handle_project_action(instance, f"auth_{provider}"))
+        instance._action_auth.assert_called_once_with(provider)
 
     def test_project_action_dispatch_import_opencode(self) -> None:
         """Import opencode config action routes to the handler."""
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
-        coro = AppClass._handle_project_action(instance, "import_opencode_config")
-        asyncio.run(coro)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class._handle_project_action(instance, "import_opencode_config"))
         instance._action_import_opencode_config.assert_called_once()
 
-    def test_task_action_dispatch_all(self) -> None:
+    @pytest.mark.parametrize(("action", "handler"), _task_action_cases())
+    def test_task_action_dispatch_all(self, action: str, handler: str) -> None:
         """Every entry in TASK_ACTION_HANDLERS routes to its handler."""
-        app_mod, AppClass = import_app()
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class._handle_task_action(instance, action))
+        getattr(instance, handler).assert_called_once()
 
-        for action, handler in app_mod.TASK_ACTION_HANDLERS.items():
-            with self.subTest(action=action):
-                instance = mock.Mock(spec=AppClass)
-                coro = AppClass._handle_task_action(instance, action)
-                asyncio.run(coro)
-                getattr(instance, handler).assert_called_once()
-
-    def test_project_action_dispatch_all(self) -> None:
+    @pytest.mark.parametrize(("action", "handler"), _project_action_cases())
+    def test_project_action_dispatch_all(self, action: str, handler: str) -> None:
         """Every entry in PROJECT_ACTION_HANDLERS routes to its handler."""
-        app_mod, AppClass = import_app()
-
-        for action, handler in app_mod.PROJECT_ACTION_HANDLERS.items():
-            with self.subTest(action=action):
-                instance = mock.Mock(spec=AppClass)
-                coro = AppClass._handle_project_action(instance, action)
-                asyncio.run(coro)
-                getattr(instance, handler).assert_called_once()
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class._handle_project_action(instance, action))
+        getattr(instance, handler).assert_called_once()
 
     def test_action_run_cli_from_main(self) -> None:
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
-        coro = AppClass.action_run_cli_from_main(instance)
-        asyncio.run(coro)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class.action_run_cli_from_main(instance))
         instance._action_task_start_cli.assert_called_once()
 
     def test_action_delete_task_from_main(self) -> None:
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
-        coro = AppClass.action_delete_task_from_main(instance)
-        asyncio.run(coro)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class.action_delete_task_from_main(instance))
         instance.action_delete_task.assert_called_once()
 
     def test_action_run_autopilot_from_main(self) -> None:
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
-        coro = AppClass.action_run_autopilot_from_main(instance)
-        asyncio.run(coro)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class.action_run_autopilot_from_main(instance))
         instance._action_task_start_autopilot.assert_called_once()
 
     def test_action_follow_logs_from_main(self) -> None:
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
-        coro = AppClass.action_follow_logs_from_main(instance)
-        asyncio.run(coro)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class.action_follow_logs_from_main(instance))
         instance._action_follow_logs.assert_called_once()
 
 
-class ActionSelectionTests(TestCase):
+class TestActionSelection:
     """Tests for task selection after task creation flows."""
 
     def test_action_new_task_selects_created_task(self) -> None:
-        _, AppClass = import_app()
-
-        instance = AppClass()
-        instance.current_project_id = "proj1"
-        instance._last_selected_tasks = {}
-        instance.notify = mock.Mock()
-        instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
-        instance._save_selection_state = mock.Mock()
-        instance.refresh_tasks = mock.AsyncMock()
+        _, app_class = import_app()
+        instance = make_creation_app(app_class)
         fake_task_new = mock.Mock(return_value="7")
-        action_globals = AppClass.action_new_task.__globals__
-
-        # push_screen now shows a name modal; simulate immediate callback
-        async def fake_push_screen(screen, callback):
-            await callback("test-name")
-
-        instance.push_screen = fake_push_screen
+        action_globals = app_class.action_new_task.__globals__
 
         with (
             mock.patch.dict(
@@ -844,32 +689,20 @@ class ActionSelectionTests(TestCase):
             ),
             mock.patch("builtins.input", return_value=""),
         ):
-            asyncio.run(AppClass.action_new_task(instance))
+            run(app_class.action_new_task(instance))
 
-        self.assertEqual(instance._last_selected_tasks.get("proj1"), "7")
+        assert instance._last_selected_tasks.get("proj1") == "7"
         fake_task_new.assert_called_once_with("proj1", name="test-name")
         instance._save_selection_state.assert_called_once()
         instance.refresh_tasks.assert_awaited_once()
 
     def test_action_new_task_calls_focus_helper(self) -> None:
-        _, AppClass = import_app()
-
-        instance = AppClass()
-        instance.current_project_id = "proj1"
-        instance._last_selected_tasks = {}
-        instance.notify = mock.Mock()
-        instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
-        instance._save_selection_state = mock.Mock()
-        instance.refresh_tasks = mock.AsyncMock()
+        _, app_class = import_app()
+        instance = make_creation_app(app_class)
         fake_task_new = mock.Mock(return_value="8")
-        action_globals = AppClass.action_new_task.__globals__
+        action_globals = app_class.action_new_task.__globals__
         original_focus = instance._focus_task_after_creation
         instance._focus_task_after_creation = mock.Mock(wraps=original_focus)
-
-        async def fake_push_screen(screen, callback):
-            await callback("test-name")
-
-        instance.push_screen = fake_push_screen
 
         with (
             mock.patch.dict(
@@ -878,7 +711,7 @@ class ActionSelectionTests(TestCase):
             ),
             mock.patch("builtins.input", return_value=""),
         ):
-            asyncio.run(AppClass.action_new_task(instance))
+            run(app_class.action_new_task(instance))
 
         fake_task_new.assert_called_once_with("proj1", name="test-name")
         instance._focus_task_after_creation.assert_called_once_with("proj1", "8")
@@ -886,23 +719,11 @@ class ActionSelectionTests(TestCase):
         instance.refresh_tasks.assert_awaited_once()
 
     def test_task_start_cli_selects_created_task(self) -> None:
-        _, AppClass = import_app()
-
-        instance = AppClass()
-        instance.current_project_id = "proj1"
-        instance._last_selected_tasks = {}
-        instance.notify = mock.Mock()
-        instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
-        instance._save_selection_state = mock.Mock()
-        instance.refresh_tasks = mock.AsyncMock()
+        _, app_class = import_app()
+        instance = make_creation_app(app_class)
         fake_task_new = mock.Mock(return_value="42")
         fake_task_run_cli = mock.Mock()
-        action_globals = AppClass._action_task_start_cli.__globals__
-
-        async def fake_push_screen(screen, callback):
-            await callback("test-name")
-
-        instance.push_screen = fake_push_screen
+        action_globals = app_class._action_task_start_cli.__globals__
 
         with (
             mock.patch.dict(
@@ -915,9 +736,9 @@ class ActionSelectionTests(TestCase):
             ),
             mock.patch("builtins.input", return_value=""),
         ):
-            asyncio.run(AppClass._action_task_start_cli(instance))
+            run(app_class._action_task_start_cli(instance))
 
-        self.assertEqual(instance._last_selected_tasks.get("proj1"), "42")
+        assert instance._last_selected_tasks.get("proj1") == "42"
         fake_task_new.assert_called_once_with("proj1", name="test-name")
         fake_task_run_cli.assert_called_once_with("proj1", "42")
         instance._save_selection_state.assert_called_once()
@@ -928,24 +749,12 @@ class ActionSelectionTests(TestCase):
 
         set_experimental(True)
         try:
-            _, AppClass = import_app()
-
-            instance = AppClass()
-            instance.current_project_id = "proj1"
-            instance._last_selected_tasks = {}
-            instance.notify = mock.Mock()
-            instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
-            instance._save_selection_state = mock.Mock()
-            instance.refresh_tasks = mock.AsyncMock()
+            _, app_class = import_app()
+            instance = make_creation_app(app_class)
             instance._prompt_ui_backend = mock.Mock(return_value="codex")
             fake_task_new = mock.Mock(return_value="99")
             fake_task_run_web = mock.Mock()
-            action_globals = AppClass._action_task_start_web.__globals__
-
-            async def fake_push_screen(screen, callback):
-                await callback("test-name")
-
-            instance.push_screen = fake_push_screen
+            action_globals = app_class._action_task_start_web.__globals__
 
             with (
                 mock.patch.dict(
@@ -958,9 +767,9 @@ class ActionSelectionTests(TestCase):
                 ),
                 mock.patch("builtins.input", return_value=""),
             ):
-                asyncio.run(AppClass._action_task_start_web(instance))
+                run(app_class._action_task_start_web(instance))
 
-            self.assertEqual(instance._last_selected_tasks.get("proj1"), "99")
+            assert instance._last_selected_tasks.get("proj1") == "99"
             fake_task_new.assert_called_once_with("proj1", name="test-name")
             fake_task_run_web.assert_called_once_with("proj1", "99", backend="codex")
             instance._save_selection_state.assert_called_once()
@@ -969,9 +778,9 @@ class ActionSelectionTests(TestCase):
             set_experimental(False)
 
     def test_autopilot_launch_selects_created_task(self) -> None:
-        app_mod, AppClass = import_app()
+        app_mod, app_class = import_app()
 
-        instance = AppClass()
+        instance = app_class()
         instance.current_project_id = "proj1"
         instance._last_selected_tasks = {}
         instance.notify = mock.Mock()
@@ -986,29 +795,23 @@ class ActionSelectionTests(TestCase):
         event.worker = worker
         event.state = app_mod.WorkerState.SUCCESS
 
-        asyncio.run(AppClass.handle_worker_state_changed(instance, event))
+        run(app_class.handle_worker_state_changed(instance, event))
 
-        self.assertEqual(instance._last_selected_tasks.get("proj1"), "123")
+        assert instance._last_selected_tasks.get("proj1") == "123"
         instance._save_selection_state.assert_called_once()
         instance._start_autopilot_watcher.assert_called_once_with("proj1", "123")
         instance.refresh_tasks.assert_awaited_once()
 
 
-class GateSyncActionTests(TestCase):
+class TestGateSyncAction:
     """Tests for gate sync action behavior in suspended terminal mode."""
 
     def test_action_sync_gate_handles_system_exit_without_exiting_tui(self) -> None:
-        _, AppClass = import_app()
-
-        instance = AppClass()
-        instance.current_project_id = "proj1"
-        instance.notify = mock.Mock()
-        instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
-        instance._print_sync_gate_ssh_help = mock.Mock()
-        instance._refresh_project_state = mock.Mock()
+        _, app_class = import_app()
+        instance = make_sync_gate_app(app_class)
         fake_gate = mock.Mock()
         fake_gate.sync = mock.Mock(side_effect=SystemExit("auth failed"))
-        action_globals = AppClass._action_sync_gate.__globals__
+        action_globals = app_class._action_sync_gate.__globals__
 
         with (
             mock.patch.dict(
@@ -1020,7 +823,7 @@ class GateSyncActionTests(TestCase):
             ),
             mock.patch("builtins.input", return_value=""),
         ):
-            asyncio.run(AppClass._action_sync_gate(instance))
+            run(app_class._action_sync_gate(instance))
 
         fake_gate.sync.assert_called_once()
         instance._print_sync_gate_ssh_help.assert_called_once_with("proj1")
@@ -1028,17 +831,11 @@ class GateSyncActionTests(TestCase):
         instance._refresh_project_state.assert_called_once()
 
     def test_action_sync_gate_success_notifies_and_refreshes(self) -> None:
-        _, AppClass = import_app()
-
-        instance = AppClass()
-        instance.current_project_id = "proj1"
-        instance.notify = mock.Mock()
-        instance.suspend = mock.Mock(return_value=contextlib.nullcontext())
-        instance._print_sync_gate_ssh_help = mock.Mock()
-        instance._refresh_project_state = mock.Mock()
+        _, app_class = import_app()
+        instance = make_sync_gate_app(app_class)
         fake_gate = mock.Mock()
         fake_gate.sync = mock.Mock(return_value={"success": True, "created": False, "errors": []})
-        action_globals = AppClass._action_sync_gate.__globals__
+        action_globals = app_class._action_sync_gate.__globals__
 
         with (
             mock.patch.dict(
@@ -1050,7 +847,7 @@ class GateSyncActionTests(TestCase):
             ),
             mock.patch("builtins.input", return_value=""),
         ):
-            asyncio.run(AppClass._action_sync_gate(instance))
+            run(app_class._action_sync_gate(instance))
 
         fake_gate.sync.assert_called_once()
         instance._print_sync_gate_ssh_help.assert_not_called()
@@ -1058,34 +855,30 @@ class GateSyncActionTests(TestCase):
         instance._refresh_project_state.assert_called_once()
 
 
-class ProjectScreenNoneStateTests(TestCase):
+class TestProjectScreenNoneState:
     """Tests that ProjectDetailsScreen handles None state correctly."""
 
     def test_project_screen_stores_none_state(self) -> None:
         screens, _ = import_screens()
-        project = mock.Mock()
-        project.id = "proj1"
+        project = make_project(id="proj1")
         screen = screens.ProjectDetailsScreen(project=project, state=None, task_count=3)
-        self.assertIsNone(screen._state)
-        self.assertEqual(screen._task_count, 3)
+        assert screen._state is None
+        assert screen._task_count == 3
 
 
-class GateServerScreenTests(TestCase):
+class TestGateServerScreen:
     """Tests for the GateServerScreen."""
 
     def test_gate_server_screen_construction(self) -> None:
         screens, _ = import_screens()
-        status = mock.Mock()
-        status.mode = "systemd"
-        status.running = True
-        status.port = 9418
+        status = make_gate_server_status()
         screen = screens.GateServerScreen(status)
-        self.assertEqual(screen._status, status)
+        assert screen._status == status
 
     def test_gate_server_screen_construction_default(self) -> None:
         screens, _ = import_screens()
         screen = screens.GateServerScreen()
-        self.assertIsNone(screen._status)
+        assert screen._status is None
 
     def test_gate_server_screen_dismiss(self) -> None:
         screens, _ = import_screens()
@@ -1094,109 +887,85 @@ class GateServerScreenTests(TestCase):
         screen.action_dismiss()
         screen.dismiss.assert_called_once_with(None)
 
-    def test_gate_server_screen_action_install(self) -> None:
+    @pytest.mark.parametrize(
+        ("method_name", "expected"),
+        [
+            pytest.param("action_gate_install", "gate_install", id="install"),
+            pytest.param("action_gate_uninstall", "gate_uninstall", id="uninstall"),
+            pytest.param("action_gate_start", "gate_start", id="start"),
+            pytest.param("action_gate_stop", "gate_stop", id="stop"),
+        ],
+    )
+    def test_gate_server_screen_actions(self, method_name: str, expected: str) -> None:
         screens, _ = import_screens()
         screen = screens.GateServerScreen()
         screen.dismiss = mock.Mock()
-        screen.action_gate_install()
-        screen.dismiss.assert_called_once_with("gate_install")
-
-    def test_gate_server_screen_action_uninstall(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.GateServerScreen()
-        screen.dismiss = mock.Mock()
-        screen.action_gate_uninstall()
-        screen.dismiss.assert_called_once_with("gate_uninstall")
-
-    def test_gate_server_screen_action_start(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.GateServerScreen()
-        screen.dismiss = mock.Mock()
-        screen.action_gate_start()
-        screen.dismiss.assert_called_once_with("gate_start")
-
-    def test_gate_server_screen_action_stop(self) -> None:
-        screens, _ = import_screens()
-        screen = screens.GateServerScreen()
-        screen.dismiss = mock.Mock()
-        screen.action_gate_stop()
-        screen.dismiss.assert_called_once_with("gate_stop")
+        getattr(screen, method_name)()
+        screen.dismiss.assert_called_once_with(expected)
 
 
-class CommandPaletteTests(TestCase):
+class TestCommandPalette:
     """Tests for command palette customization."""
 
     def test_get_system_commands_includes_gate_server(self) -> None:
         from tui_test_helpers import build_textual_stubs
 
         stubs = build_textual_stubs()
-        _, AppClass = import_app(stubs)
-        instance = AppClass()
+        _, app_class = import_app(stubs)
+        instance = app_class()
         # get_system_commands imports SystemCommand at call time, so we need
         # textual.app in sys.modules during the call.
         with mock.patch.dict(sys.modules, stubs):
-            commands = list(AppClass.get_system_commands(instance, screen=mock.Mock()))
+            commands = list(app_class.get_system_commands(instance, screen=mock.Mock()))
         titles = [cmd.title for cmd in commands]
-        self.assertIn("Git Gate Server", titles)
+        assert "Git Gate Server" in titles
 
 
-class RenderGateServerStatusTests(TestCase):
+class TestRenderGateServerStatus:
     """Tests for the render_gate_server_status helper."""
 
     def test_render_gate_server_status_none(self) -> None:
         screens, _ = import_screens()
         result = screens.render_gate_server_status(None)
-        self.assertIsInstance(result, Text)
-        self.assertIn("unknown", str(result))
+        assert isinstance(result, Text)
+        assert "unknown" in str(result)
 
     def test_render_gate_server_status_running(self) -> None:
         screens, _ = import_screens()
-        status = mock.Mock()
-        status.mode = "systemd"
-        status.running = True
-        status.port = 9418
+        status = make_gate_server_status()
         with mock.patch.object(screens, "check_units_outdated", return_value=None):
             result = screens.render_gate_server_status(status)
         text_str = str(result)
-        self.assertIn("running", text_str)
-        self.assertIn("systemd", text_str)
-        self.assertIn("9418", text_str)
+        assert "running" in text_str
+        assert "systemd" in text_str
+        assert str(GATE_PORT) in text_str
 
     def test_render_gate_server_status_stopped(self) -> None:
         screens, _ = import_screens()
-        status = mock.Mock()
-        status.mode = "none"
-        status.running = False
-        status.port = 9418
+        status = make_gate_server_status(mode="none", running=False)
         with mock.patch.object(screens, "check_units_outdated", return_value=None):
             result = screens.render_gate_server_status(status)
         text_str = str(result)
-        self.assertIn("stopped", text_str)
-        self.assertIn("not running", text_str)
+        assert "stopped" in text_str
+        assert "not running" in text_str
 
     def test_render_gate_server_status_outdated(self) -> None:
         screens, _ = import_screens()
-        status = mock.Mock()
-        status.mode = "systemd"
-        status.running = True
-        status.port = 9418
+        status = make_gate_server_status()
         with mock.patch.object(
             screens, "check_units_outdated", return_value="Units outdated (v1 vs v3)"
         ):
             result = screens.render_gate_server_status(status)
         text_str = str(result)
-        self.assertIn("outdated", text_str)
+        assert "outdated" in text_str
 
 
-class CombinedGateStatusTests(TestCase):
+class TestCombinedGateStatus:
     """Tests for combined gate status in render_project_details."""
 
     def test_render_project_details_gate_server_down(self) -> None:
         widgets = import_widgets()
-        project = mock.Mock()
-        project.id = "test-proj"
-        project.upstream_url = "https://example.com/repo.git"
-        project.security_class = "online"
+        project = make_project()
         state = {"ssh": True, "dockerfiles": True, "images": True, "gate": True}
         gate_status = mock.Mock()
         gate_status.running = False
@@ -1205,14 +974,11 @@ class CombinedGateStatusTests(TestCase):
             project, state, task_count=5, gate_server_status=gate_status
         )
         text_str = str(result)
-        self.assertIn("gate down", text_str)
+        assert "gate down" in text_str
 
     def test_render_project_details_gate_server_ok(self) -> None:
         widgets = import_widgets()
-        project = mock.Mock()
-        project.id = "test-proj"
-        project.upstream_url = "https://example.com/repo.git"
-        project.security_class = "online"
+        project = make_project()
         state = {"ssh": True, "dockerfiles": True, "images": True, "gate": True}
         gate_status = mock.Mock()
         gate_status.running = True
@@ -1221,64 +987,57 @@ class CombinedGateStatusTests(TestCase):
             project, state, task_count=5, gate_server_status=gate_status
         )
         text_str = str(result)
-        self.assertNotIn("gate down", text_str)
-        self.assertIn("yes", text_str)
+        assert "gate down" not in text_str
+        assert "yes" in text_str
 
     def test_render_project_details_gate_server_none_fallback(self) -> None:
         """When gate_server_status is None, show normal repo-based status."""
         widgets = import_widgets()
-        project = mock.Mock()
-        project.id = "test-proj"
-        project.upstream_url = "https://example.com/repo.git"
-        project.security_class = "online"
+        project = make_project()
         state = {"ssh": True, "dockerfiles": True, "images": True, "gate": False}
 
         result = widgets.render_project_details(project, state, task_count=5)
         text_str = str(result)
-        self.assertNotIn("gate down", text_str)
+        assert "gate down" not in text_str
 
 
-class GateServerActionDispatchTests(TestCase):
+class TestGateServerActionDispatch:
     """Tests for gate server action dispatch routing."""
 
-    def test_gate_server_action_dispatch_all(self) -> None:
+    @pytest.mark.parametrize(("action", "handler"), _gate_server_action_cases())
+    def test_gate_server_action_dispatch_all(self, action: str, handler: str) -> None:
         """Every entry in GATE_SERVER_ACTION_HANDLERS routes to its handler."""
-        app_mod, AppClass = import_app()
-
-        for action, handler in app_mod.GATE_SERVER_ACTION_HANDLERS.items():
-            with self.subTest(action=action):
-                instance = mock.Mock(spec=AppClass)
-                coro = AppClass._on_gate_server_action_result(instance, action)
-                asyncio.run(coro)
-                getattr(instance, handler).assert_called_once()
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class._on_gate_server_action_result(instance, action))
+        getattr(instance, handler).assert_called_once()
 
     def test_gate_server_action_dispatch_none(self) -> None:
         """None result does not dispatch any handler."""
-        app_mod, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
-        coro = AppClass._on_gate_server_action_result(instance, None)
-        asyncio.run(coro)
+        app_mod, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
+        run(app_class._on_gate_server_action_result(instance, None))
         # No action handler should have been called
         for handler in app_mod.GATE_SERVER_ACTION_HANDLERS.values():
             getattr(instance, handler).assert_not_called()
 
 
-class DeleteTaskResultTests(TestCase):
+class TestDeleteTaskResult:
     """Tests for _delete_task tuple shape and delete notification messages."""
 
     def _call_delete(
         self, side_effect: BaseException | None = None, **kwargs: str
     ) -> tuple[str, str, str, str | None]:
         """Import app, mock task_delete, and call _delete_task."""
-        _, AppClass = import_app()
-        instance = mock.Mock(spec=AppClass)
+        _, app_class = import_app()
+        instance = mock.Mock(spec=app_class)
         # Patch task_delete in the method's own globals (the reimported module dict).
-        fn_globals = AppClass._delete_task.__globals__
+        fn_globals = app_class._delete_task.__globals__
         orig = fn_globals["task_delete"]
         fake = mock.Mock(side_effect=side_effect) if side_effect else mock.Mock()
         fn_globals["task_delete"] = fake
         try:
-            return AppClass._delete_task(
+            return app_class._delete_task(
                 instance,
                 kwargs.get("project_id", "proj1"),
                 kwargs.get("task_id", "3"),
@@ -1305,7 +1064,3 @@ class DeleteTaskResultTests(TestCase):
         """Empty task name is preserved through the round-trip."""
         result = self._call_delete(task_name="")
         assert result == ("proj1", "3", "", None)
-
-
-if __name__ == "__main__":
-    main()

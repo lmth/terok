@@ -1,208 +1,111 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the emoji display-width utility."""
+"""Tests for emoji rendering and display metadata hygiene."""
 
-import unittest
+from __future__ import annotations
 
+from collections.abc import Generator, Iterable
+
+import pytest
 from rich.cells import cell_len
 
-from terok.lib.util.emoji import is_emoji_enabled, render_emoji, set_emoji_enabled
+from terok.lib.containers.task_display import (
+    GPU_DISPLAY,
+    MODE_DISPLAY,
+    SECURITY_CLASS_DISPLAY,
+    STATUS_DISPLAY,
+    WEB_BACKEND_DEFAULT,
+    WEB_BACKEND_DISPLAY,
+)
+from terok.lib.containers.work_status import WORK_STATUS_DISPLAY
+from terok.lib.util.emoji import EmojiInfo, is_emoji_enabled, render_emoji, set_emoji_enabled
 
 
 class _FakeInfo:
-    """Minimal object satisfying the EmojiInfo protocol."""
+    """Minimal object satisfying the ``EmojiInfo`` protocol."""
 
     def __init__(self, emoji: str, label: str) -> None:
         self.emoji = emoji
         self.label = label
 
 
-def _emoji_is_width_2(emoji: str) -> bool:
-    """Return True if *emoji* is natively 2 cells wide (no padding needed)."""
+EMOJI_COLLECTIONS = [
+    pytest.param("status", STATUS_DISPLAY.values(), id="status"),
+    pytest.param("mode", MODE_DISPLAY.values(), id="mode"),
+    pytest.param("web-backend", WEB_BACKEND_DISPLAY.values(), id="web-backend"),
+    pytest.param("security-class", SECURITY_CLASS_DISPLAY.values(), id="security-class"),
+    pytest.param("gpu", GPU_DISPLAY.values(), id="gpu"),
+    pytest.param("work-status", WORK_STATUS_DISPLAY.values(), id="work-status"),
+]
+
+LABEL_COLLECTIONS = [
+    pytest.param("status", STATUS_DISPLAY.values(), id="status"),
+    pytest.param("web-backend", WEB_BACKEND_DISPLAY.values(), id="web-backend"),
+    pytest.param("security-class", SECURITY_CLASS_DISPLAY.values(), id="security-class"),
+    pytest.param("gpu", GPU_DISPLAY.values(), id="gpu"),
+    pytest.param("work-status", WORK_STATUS_DISPLAY.values(), id="work-status"),
+]
+
+
+@pytest.fixture(autouse=True)
+def reset_emoji_mode() -> Generator[None, None, None]:
+    """Reset emoji rendering mode before and after each test."""
+    set_emoji_enabled(True)
+    yield
+    set_emoji_enabled(True)
+
+
+def is_width_two(emoji: str) -> bool:
+    """Return whether *emoji* occupies exactly two cells."""
     return cell_len(emoji) == 2
 
 
-class TestRenderEmoji(unittest.TestCase):
-    """Verify render_emoji returns the emoji from info objects."""
-
-    def setUp(self):
-        """Ensure emoji mode is enabled for each test."""
-        set_emoji_enabled(True)
-
-    def tearDown(self):
-        """Reset emoji mode after each test."""
-        set_emoji_enabled(True)
-
-    def test_returns_emoji_from_info(self):
-        """render_emoji returns the emoji attribute."""
-        info = _FakeInfo("\U0001f680", "rocket")
-        self.assertEqual(render_emoji(info), "\U0001f680")
-
-    def test_empty_emoji_returns_empty(self):
-        """Empty emoji string produces empty output."""
-        info = _FakeInfo("", "nothing")
-        self.assertEqual(render_emoji(info), "")
-
-    def test_all_status_emojis_are_exactly_width_2(self):
-        """All status emojis used by the project are exactly 2 cells wide."""
-        from terok.lib.containers.task_display import STATUS_DISPLAY
-
-        for status, info in STATUS_DISPLAY.items():
-            self.assertTrue(
-                _emoji_is_width_2(info.emoji),
-                f"Status emoji for {status!r} must be natively 2 cells wide",
-            )
-
-    def test_all_mode_emojis_are_exactly_width_2(self):
-        """All mode emojis used by the project are exactly 2 cells wide."""
-        from terok.lib.containers.task_display import MODE_DISPLAY
-
-        for mode, info in MODE_DISPLAY.items():
-            self.assertTrue(
-                _emoji_is_width_2(info.emoji),
-                f"Mode emoji for {mode!r} must be natively 2 cells wide",
-            )
-
-    def test_all_backend_emojis_are_exactly_width_2(self):
-        """All web backend emojis are exactly 2 cells wide."""
-        from terok.lib.containers.task_display import WEB_BACKEND_DEFAULT, WEB_BACKEND_DISPLAY
-
-        for backend, info in WEB_BACKEND_DISPLAY.items():
-            self.assertTrue(
-                _emoji_is_width_2(info.emoji),
-                f"Backend emoji for {backend!r} must be natively 2 cells wide",
-            )
-        self.assertTrue(_emoji_is_width_2(WEB_BACKEND_DEFAULT.emoji))
-
-    def test_all_security_class_emojis_are_exactly_width_2(self):
-        """All security class emojis are exactly 2 cells wide."""
-        from terok.lib.containers.task_display import SECURITY_CLASS_DISPLAY
-
-        for key, badge in SECURITY_CLASS_DISPLAY.items():
-            self.assertTrue(
-                _emoji_is_width_2(badge.emoji),
-                f"Security class emoji for {key!r} must be natively 2 cells wide",
-            )
-
-    def test_all_gpu_emojis_are_exactly_width_2(self):
-        """All GPU display emojis are exactly 2 cells wide."""
-        from terok.lib.containers.task_display import GPU_DISPLAY
-
-        for key, badge in GPU_DISPLAY.items():
-            self.assertTrue(
-                _emoji_is_width_2(badge.emoji),
-                f"GPU emoji for {key!r} must be natively 2 cells wide",
-            )
-
-    def test_all_work_status_emojis_are_exactly_width_2(self):
-        """All work status emojis are exactly 2 cells wide."""
-        from terok.lib.containers.work_status import WORK_STATUS_DISPLAY
-
-        for key, info in WORK_STATUS_DISPLAY.items():
-            self.assertTrue(
-                _emoji_is_width_2(info.emoji),
-                f"Work status emoji for {key!r} must be natively 2 cells wide",
-            )
+@pytest.mark.parametrize(
+    ("enabled", "info", "expected"),
+    [
+        pytest.param(True, _FakeInfo("🚀", "rocket"), "🚀", id="enabled"),
+        pytest.param(True, _FakeInfo("", "nothing"), "", id="enabled-empty-emoji"),
+        pytest.param(False, _FakeInfo("🚀", "rocket"), "[rocket]", id="disabled"),
+        pytest.param(False, _FakeInfo("🚀", ""), "", id="disabled-empty-label"),
+    ],
+)
+def test_render_emoji_respects_global_mode(enabled: bool, info: _FakeInfo, expected: str) -> None:
+    """Emoji rendering returns either the emoji or a text fallback."""
+    set_emoji_enabled(enabled)
+    assert is_emoji_enabled() is enabled
+    assert render_emoji(info) == expected
 
 
-class TestNoEmojiMode(unittest.TestCase):
-    """Verify render_emoji returns text labels when emoji mode is disabled."""
-
-    def setUp(self):
-        """Disable emoji mode for these tests."""
-        set_emoji_enabled(False)
-
-    def tearDown(self):
-        """Re-enable emoji mode after tests."""
-        set_emoji_enabled(True)
-
-    def test_is_emoji_enabled_false(self):
-        """is_emoji_enabled reflects the current state."""
-        self.assertFalse(is_emoji_enabled())
-
-    def test_no_emoji_returns_label(self):
-        """With emoji disabled, returns [label]."""
-        info = _FakeInfo("\U0001f680", "rocket")
-        self.assertEqual(render_emoji(info), "[rocket]")
-
-    def test_no_emoji_empty_label_returns_empty(self):
-        """With emoji disabled and empty label, returns empty string."""
-        info = _FakeInfo("\U0001f680", "")
-        self.assertEqual(render_emoji(info), "")
-
-    def test_set_emoji_enabled_toggle(self):
-        """Toggling emoji mode changes render_emoji behavior."""
-        info = _FakeInfo("\U0001f680", "rocket")
-        set_emoji_enabled(True)
-        self.assertTrue(is_emoji_enabled())
-        self.assertEqual(render_emoji(info), "\U0001f680")
-
-        set_emoji_enabled(False)
-        self.assertFalse(is_emoji_enabled())
-        self.assertEqual(render_emoji(info), "[rocket]")
-
-    def test_all_status_display_has_labels(self):
-        """All STATUS_DISPLAY entries have non-empty labels for no-emoji mode."""
-        from terok.lib.containers.task_display import STATUS_DISPLAY
-
-        for status, info in STATUS_DISPLAY.items():
-            self.assertTrue(
-                info.label,
-                f"STATUS_DISPLAY[{status!r}] must have a non-empty label for --no-emoji mode",
-            )
-
-    def test_all_mode_display_has_labels(self):
-        """All MODE_DISPLAY entries have labels (empty is OK for None mode)."""
-        from terok.lib.containers.task_display import MODE_DISPLAY
-
-        for mode, info in MODE_DISPLAY.items():
-            if mode is not None:
-                self.assertTrue(
-                    info.label,
-                    f"MODE_DISPLAY[{mode!r}] must have a non-empty label for --no-emoji mode",
-                )
-
-    def test_all_backend_display_has_labels(self):
-        """All WEB_BACKEND_DISPLAY entries have non-empty labels."""
-        from terok.lib.containers.task_display import WEB_BACKEND_DISPLAY
-
-        for backend, info in WEB_BACKEND_DISPLAY.items():
-            self.assertTrue(
-                info.label,
-                f"WEB_BACKEND_DISPLAY[{backend!r}] must have a non-empty label",
-            )
-
-    def test_all_security_class_display_has_labels(self):
-        """All SECURITY_CLASS_DISPLAY entries have non-empty labels."""
-        from terok.lib.containers.task_display import SECURITY_CLASS_DISPLAY
-
-        for key, badge in SECURITY_CLASS_DISPLAY.items():
-            self.assertTrue(
-                badge.label,
-                f"SECURITY_CLASS_DISPLAY[{key!r}] must have a non-empty label",
-            )
-
-    def test_all_gpu_display_has_labels(self):
-        """All GPU_DISPLAY entries have non-empty labels."""
-        from terok.lib.containers.task_display import GPU_DISPLAY
-
-        for key, badge in GPU_DISPLAY.items():
-            self.assertTrue(
-                badge.label,
-                f"GPU_DISPLAY[{key!r}] must have a non-empty label",
-            )
-
-    def test_all_work_status_display_has_labels(self):
-        """All WORK_STATUS_DISPLAY entries have non-empty labels."""
-        from terok.lib.containers.work_status import WORK_STATUS_DISPLAY
-
-        for key, info in WORK_STATUS_DISPLAY.items():
-            self.assertTrue(
-                info.label,
-                f"WORK_STATUS_DISPLAY[{key!r}] must have a non-empty label",
-            )
+def test_set_emoji_enabled_toggles_global_state() -> None:
+    """The public toggle API updates the observable global state."""
+    assert is_emoji_enabled()
+    set_emoji_enabled(False)
+    assert not is_emoji_enabled()
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.parametrize(("name", "infos"), EMOJI_COLLECTIONS)
+def test_project_display_emojis_are_natively_two_cells(
+    name: str,
+    infos: Iterable[EmojiInfo],
+) -> None:
+    """Every registered project emoji is natively two cells wide."""
+    assert all(is_width_two(info.emoji) for info in infos), name
+    assert all("\ufe0f" not in info.emoji for info in infos), name
+    assert is_width_two(WEB_BACKEND_DEFAULT.emoji)
+    assert "\ufe0f" not in WEB_BACKEND_DEFAULT.emoji
+
+
+@pytest.mark.parametrize(("name", "infos"), LABEL_COLLECTIONS)
+def test_display_entries_have_non_empty_labels(
+    name: str,
+    infos: Iterable[EmojiInfo],
+) -> None:
+    """Collections used in ``--no-emoji`` mode expose non-empty labels."""
+    assert all(info.label for info in infos), name
+
+
+def test_mode_display_entries_have_labels_except_placeholder() -> None:
+    """Only the unset placeholder mode may omit a no-emoji label."""
+    for mode, info in MODE_DISPLAY.items():
+        assert info.label or mode is None

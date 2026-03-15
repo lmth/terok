@@ -1,9 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for shell launch helpers used by the TUI."""
+
+from __future__ import annotations
+
+import shlex
 import subprocess
-import unittest
 import unittest.mock
+from collections.abc import Callable
+
+import pytest
 
 from terok.tui.shell_launch import (
     is_inside_gnome_terminal,
@@ -13,277 +20,342 @@ from terok.tui.shell_launch import (
     spawn_terminal_with_command,
     tmux_new_window,
 )
+from testfs import FAKE_TMUX_SOCKET
+
+SHELL_COMMAND = ["podman", "exec", "-it", "c1", "bash"]
 
 
-class TmuxDetectionTests(unittest.TestCase):
-    """Tests for tmux environment detection."""
-
-    def test_is_inside_tmux_true(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {"TMUX": "/tmp/tmux-1000/default,12345,0"}):
-            self.assertTrue(is_inside_tmux())
-
-    def test_is_inside_tmux_false(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(is_inside_tmux())
+def _shell_payload(command: list[str]) -> str:
+    """Return the shell-quoted payload string used by launcher helpers."""
+    return " ".join(shlex.quote(part) for part in command)
 
 
-class GnomeTerminalDetectionTests(unittest.TestCase):
-    """Tests for GNOME Terminal environment detection."""
+def terminal_env(
+    term_program: str | None = None, *, tmux: bool = False, gnome_service: bool = False
+) -> dict[str, str]:
+    """Build a minimal environment dict for shell-launch tests."""
+    env: dict[str, str] = {}
+    if term_program is not None:
+        env["TERM_PROGRAM"] = term_program
+    if tmux:
+        env["TMUX"] = str(FAKE_TMUX_SOCKET)
+    if gnome_service:
+        env["GNOME_TERMINAL_SERVICE"] = "1"
+    return env
 
-    def test_is_inside_gnome_terminal_true(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "gnome-terminal"}):
-            self.assertTrue(is_inside_gnome_terminal())
 
-    def test_is_inside_gnome_terminal_false_other_terminal(self) -> None:
+class TestTerminalDetection:
+    """Tests for terminal environment detection."""
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [(terminal_env(tmux=True), True), ({}, False)],
+        ids=["inside-tmux", "not-in-tmux"],
+    )
+    def test_is_inside_tmux(self, env: dict[str, str], expected: bool) -> None:
+        with unittest.mock.patch.dict("os.environ", env, clear=True):
+            assert is_inside_tmux() is expected
+
+    @pytest.mark.parametrize(
+        ("detector", "env", "parent_match", "expected"),
+        [
+            (is_inside_gnome_terminal, terminal_env("gnome-terminal"), False, True),
+            (is_inside_gnome_terminal, terminal_env("iTerm.app"), False, False),
+            (is_inside_gnome_terminal, {}, False, False),
+            (is_inside_gnome_terminal, {}, True, True),
+            (is_inside_gnome_terminal, terminal_env(gnome_service=True), False, True),
+            (is_inside_konsole, terminal_env("konsole"), False, True),
+            (is_inside_konsole, terminal_env("gnome-terminal"), False, False),
+            (is_inside_konsole, {}, False, False),
+            (is_inside_konsole, {}, True, True),
+        ],
+        ids=[
+            "gnome-by-env",
+            "gnome-other-terminal",
+            "gnome-missing-env",
+            "gnome-parent-fallback",
+            "gnome-service",
+            "konsole-by-env",
+            "konsole-other-terminal",
+            "konsole-missing-env",
+            "konsole-parent-fallback",
+        ],
+    )
+    def test_terminal_detection(
+        self,
+        detector: Callable[[], bool],
+        env: dict[str, str],
+        parent_match: bool,
+        expected: bool,
+    ) -> None:
         with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "iTerm.app"}),
+            unittest.mock.patch.dict("os.environ", env, clear=True),
             unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
+                "terok.tui.shell_launch._parent_process_has_name",
+                return_value=parent_match,
             ),
         ):
-            self.assertFalse(is_inside_gnome_terminal())
-
-    def test_is_inside_gnome_terminal_false_not_set(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {}, clear=True),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
-            ),
-        ):
-            self.assertFalse(is_inside_gnome_terminal())
-
-    def test_is_inside_gnome_terminal_fallback_via_parent_process(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {}, clear=True),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=True
-            ),
-        ):
-            self.assertTrue(is_inside_gnome_terminal())
-
-    def test_is_inside_gnome_terminal_via_gnome_terminal_service(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {"GNOME_TERMINAL_SERVICE": "1"}),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
-            ),
-        ):
-            self.assertTrue(is_inside_gnome_terminal())
+            assert detector() is expected
 
 
-class KonsoleDetectionTests(unittest.TestCase):
-    """Tests for Konsole environment detection."""
-
-    def test_is_inside_konsole_true(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "konsole"}):
-            self.assertTrue(is_inside_konsole())
-
-    def test_is_inside_konsole_false_other_terminal(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "gnome-terminal"}),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
-            ),
-        ):
-            self.assertFalse(is_inside_konsole())
-
-    def test_is_inside_konsole_false_not_set(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {}, clear=True),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
-            ),
-        ):
-            self.assertFalse(is_inside_konsole())
-
-    def test_is_inside_konsole_fallback_via_parent_process(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {}, clear=True),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=True
-            ),
-        ):
-            self.assertTrue(is_inside_konsole())
-
-
-class TmuxNewWindowTests(unittest.TestCase):
+class TestTmuxNewWindow:
     """Tests for tmux_new_window."""
 
-    def test_success(self) -> None:
+    @pytest.mark.parametrize(
+        ("side_effect", "expected"),
+        [
+            (subprocess.CompletedProcess(args=[], returncode=0), True),
+            (subprocess.CalledProcessError(1, "tmux"), False),
+            (FileNotFoundError("tmux"), False),
+        ],
+        ids=["success", "failure", "tmux-not-found"],
+    )
+    def test_tmux_new_window(self, side_effect: object, expected: bool) -> None:
+        expected_argv = ["tmux", "new-window", "-n", "login:c1", _shell_payload(SHELL_COMMAND)]
         with unittest.mock.patch("terok.tui.shell_launch.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-            result = tmux_new_window(["podman", "exec", "-it", "c1", "bash"], title="login:c1")
-            self.assertTrue(result)
-            mock_run.assert_called_once()
-            call_args = mock_run.call_args[0][0]
-            self.assertEqual(call_args[:2], ["tmux", "new-window"])
-            self.assertIn("-n", call_args)
-            self.assertIn("login:c1", call_args)
-
-    def test_failure(self) -> None:
-        with unittest.mock.patch("terok.tui.shell_launch.subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "tmux")
-            result = tmux_new_window(["podman", "exec", "-it", "c1", "bash"])
-            self.assertFalse(result)
-
-    def test_tmux_not_found(self) -> None:
-        with unittest.mock.patch("terok.tui.shell_launch.subprocess.run") as mock_run:
-            mock_run.side_effect = FileNotFoundError("tmux")
-            result = tmux_new_window(["echo", "hello"])
-            self.assertFalse(result)
+            if isinstance(side_effect, Exception):
+                mock_run.side_effect = side_effect
+            else:
+                mock_run.return_value = side_effect
+            result = tmux_new_window(SHELL_COMMAND, title="login:c1")
+        assert result is expected
+        mock_run.assert_called_once_with(expected_argv, check=True)
 
 
-class SpawnTerminalTests(unittest.TestCase):
+class TestSpawnTerminal:
     """Tests for spawn_terminal_with_command."""
 
-    def test_gnome_terminal_inside_gnome_terminal(self) -> None:
+    @pytest.mark.parametrize(
+        ("env", "parent_match", "title", "expected_argv"),
+        [
+            (
+                terminal_env("gnome-terminal"),
+                False,
+                None,
+                ["gnome-terminal", "--tab", "--", "bash", "-c", _shell_payload(SHELL_COMMAND)],
+            ),
+            (
+                terminal_env("gnome-terminal"),
+                False,
+                "login:c1",
+                [
+                    "gnome-terminal",
+                    "--tab",
+                    "--title",
+                    "login:c1",
+                    "--",
+                    "bash",
+                    "-c",
+                    _shell_payload(SHELL_COMMAND),
+                ],
+            ),
+            (
+                terminal_env("konsole"),
+                False,
+                None,
+                ["konsole", "--new-tab", "-e", "bash", "-c", _shell_payload(SHELL_COMMAND)],
+            ),
+            (
+                terminal_env("konsole"),
+                False,
+                "login:c1",
+                [
+                    "konsole",
+                    "--new-tab",
+                    "--title",
+                    "login:c1",
+                    "-e",
+                    "bash",
+                    "-c",
+                    _shell_payload(SHELL_COMMAND),
+                ],
+            ),
+        ],
+        ids=["gnome", "gnome-with-title", "konsole", "konsole-with-title"],
+    )
+    def test_spawn_terminal_with_supported_terminal(
+        self,
+        env: dict[str, str],
+        parent_match: bool,
+        title: str | None,
+        expected_argv: list[str],
+    ) -> None:
         with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "gnome-terminal"}),
-            unittest.mock.patch("terok.tui.shell_launch.subprocess.Popen") as mock_popen,
-        ):
-            result = spawn_terminal_with_command(["podman", "exec", "-it", "c1", "bash"])
-            self.assertTrue(result)
-            mock_popen.assert_called_once()
-            call_args = mock_popen.call_args[0][0]
-            self.assertEqual(call_args[0], "gnome-terminal")
-            self.assertIn("--tab", call_args)
-            self.assertNotIn("--window", call_args)
-            self.assertIn("--", call_args)
-
-    def test_gnome_terminal_with_title(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "gnome-terminal"}),
-            unittest.mock.patch("terok.tui.shell_launch.subprocess.Popen") as mock_popen,
-        ):
-            result = spawn_terminal_with_command(
-                ["podman", "exec", "-it", "c1", "bash"], title="login:c1"
-            )
-            self.assertTrue(result)
-            mock_popen.assert_called_once()
-            call_args = mock_popen.call_args[0][0]
-            self.assertIn("--title", call_args)
-            self.assertIn("login:c1", call_args)
-
-    def test_konsole_inside_konsole(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "konsole"}),
+            unittest.mock.patch.dict("os.environ", env, clear=True),
             unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
+                "terok.tui.shell_launch._parent_process_has_name",
+                return_value=parent_match,
             ),
             unittest.mock.patch("terok.tui.shell_launch.subprocess.Popen") as mock_popen,
         ):
-            result = spawn_terminal_with_command(["podman", "exec", "-it", "c1", "bash"])
-            self.assertTrue(result)
-            mock_popen.assert_called_once()
-            call_args = mock_popen.call_args[0][0]
-            self.assertEqual(call_args[0], "konsole")
-            self.assertIn("--new-tab", call_args)
+            result = spawn_terminal_with_command(SHELL_COMMAND, title=title)
+        assert result
+        mock_popen.assert_called_once_with(expected_argv, start_new_session=True)
 
-    def test_konsole_title_propagation(self) -> None:
+    @pytest.mark.parametrize(
+        ("env", "parent_match"),
+        [(terminal_env("iTerm.app"), False), ({}, False)],
+        ids=["other-terminal", "no-terminal"],
+    )
+    def test_spawn_terminal_with_unsupported_terminal(
+        self,
+        env: dict[str, str],
+        parent_match: bool,
+    ) -> None:
         with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "konsole"}),
+            unittest.mock.patch.dict("os.environ", env, clear=True),
             unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
+                "terok.tui.shell_launch._parent_process_has_name",
+                return_value=parent_match,
             ),
             unittest.mock.patch("terok.tui.shell_launch.subprocess.Popen") as mock_popen,
         ):
-            result = spawn_terminal_with_command(
-                ["podman", "exec", "-it", "c1", "bash"], title="login:c1"
-            )
-            self.assertTrue(result)
-            mock_popen.assert_called_once()
-            call_args = mock_popen.call_args[0][0]
-            self.assertIn("--new-tab", call_args)
-            self.assertIn("--title", call_args)
-            self.assertIn("login:c1", call_args)
+            assert not spawn_terminal_with_command(["echo", "hello"])
+        mock_popen.assert_not_called()
 
-    def test_not_inside_terminal_returns_false(self) -> None:
+    @pytest.mark.parametrize(
+        "side_effect",
+        [OSError("boom"), FileNotFoundError("gnome-terminal")],
+        ids=["os-error", "not-found"],
+    )
+    def test_spawn_terminal_returns_false_on_popen_error(self, side_effect: Exception) -> None:
         with (
-            unittest.mock.patch.dict("os.environ", {}, clear=True),
+            unittest.mock.patch.dict("os.environ", terminal_env("gnome-terminal"), clear=True),
             unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
+                "terok.tui.shell_launch._parent_process_has_name",
+                return_value=False,
             ),
+            unittest.mock.patch("terok.tui.shell_launch.subprocess.Popen") as mock_popen,
         ):
-            result = spawn_terminal_with_command(["echo", "hello"])
-            self.assertFalse(result)
-
-    def test_inside_other_terminal_returns_false(self) -> None:
-        with (
-            unittest.mock.patch.dict("os.environ", {"TERM_PROGRAM": "iTerm.app"}),
-            unittest.mock.patch(
-                "terok.tui.shell_launch._parent_process_has_name", return_value=False
-            ),
-        ):
-            result = spawn_terminal_with_command(["echo", "hello"])
-            self.assertFalse(result)
+            mock_popen.side_effect = side_effect
+            assert not spawn_terminal_with_command(SHELL_COMMAND, title="login:c1")
 
 
-class LaunchLoginTests(unittest.TestCase):
+class TestLaunchLogin:
     """Tests for the launch_login orchestrator."""
 
-    def test_prefers_tmux(self) -> None:
-        """When inside tmux, tmux is preferred."""
+    @pytest.mark.parametrize(
+        ("patches", "expected"),
+        [
+            (
+                {
+                    "is_inside_tmux": True,
+                    "is_web_mode": False,
+                    "spawn_terminal_with_command": False,
+                    "tmux_new_window": True,
+                    "spawn_ttyd": None,
+                },
+                ("tmux", None),
+            ),
+            (
+                {
+                    "is_inside_tmux": False,
+                    "is_web_mode": False,
+                    "spawn_terminal_with_command": True,
+                    "tmux_new_window": False,
+                    "spawn_ttyd": None,
+                },
+                ("terminal", None),
+            ),
+            (
+                {
+                    "is_inside_tmux": True,
+                    "is_web_mode": False,
+                    "spawn_terminal_with_command": True,
+                    "tmux_new_window": False,
+                    "spawn_ttyd": None,
+                },
+                ("terminal", None),
+            ),
+            (
+                {
+                    "is_inside_tmux": False,
+                    "is_web_mode": False,
+                    "spawn_terminal_with_command": False,
+                    "tmux_new_window": False,
+                    "spawn_ttyd": None,
+                },
+                ("none", None),
+            ),
+            (
+                {
+                    "is_inside_tmux": False,
+                    "is_web_mode": True,
+                    "spawn_terminal_with_command": False,
+                    "tmux_new_window": False,
+                    "spawn_ttyd": 12345,
+                },
+                ("web", 12345),
+            ),
+            (
+                {
+                    "is_inside_tmux": False,
+                    "is_web_mode": True,
+                    "spawn_terminal_with_command": False,
+                    "tmux_new_window": False,
+                    "spawn_ttyd": None,
+                },
+                ("none", None),
+            ),
+        ],
+        ids=[
+            "prefers-tmux",
+            "falls-back-to-terminal",
+            "falls-back-after-tmux-failure",
+            "returns-none",
+            "web-mode-with-ttyd",
+            "web-mode-without-ttyd",
+        ],
+    )
+    def test_launch_login(
+        self,
+        patches: dict[str, object],
+        expected: tuple[str, int | None],
+    ) -> None:
         with (
-            unittest.mock.patch("terok.tui.shell_launch.is_inside_tmux", return_value=True),
-            unittest.mock.patch("terok.tui.shell_launch.tmux_new_window", return_value=True),
+            unittest.mock.patch(
+                "terok.tui.shell_launch.is_inside_tmux",
+                return_value=patches["is_inside_tmux"],
+            ) as mock_inside_tmux,
+            unittest.mock.patch(
+                "terok.tui.shell_launch.is_web_mode",
+                return_value=patches["is_web_mode"],
+            ) as mock_is_web_mode,
+            unittest.mock.patch(
+                "terok.tui.shell_launch.spawn_terminal_with_command",
+                return_value=patches["spawn_terminal_with_command"],
+            ) as mock_spawn_terminal,
+            unittest.mock.patch(
+                "terok.tui.shell_launch.tmux_new_window",
+                return_value=patches["tmux_new_window"],
+            ) as mock_tmux,
+            unittest.mock.patch(
+                "terok.tui.shell_launch.spawn_ttyd",
+                return_value=patches["spawn_ttyd"],
+            ) as mock_spawn_ttyd,
         ):
-            method, port = launch_login(["podman", "exec", "-it", "c1", "bash"])
-            self.assertEqual(method, "tmux")
-            self.assertIsNone(port)
+            assert launch_login(SHELL_COMMAND, title="login:c1") == expected
 
-    def test_falls_back_to_terminal_when_inside_gnome_terminal(self) -> None:
-        """When inside gnome-terminal, spawn a new tab."""
-        with (
-            unittest.mock.patch("terok.tui.shell_launch.is_inside_tmux", return_value=False),
-            unittest.mock.patch("terok.tui.shell_launch.is_web_mode", return_value=False),
-            unittest.mock.patch(
-                "terok.tui.shell_launch.is_inside_gnome_terminal", return_value=True
-            ),
-            unittest.mock.patch(
-                "terok.tui.shell_launch.spawn_terminal_with_command", return_value=True
-            ),
-        ):
-            method, port = launch_login(["podman", "exec", "-it", "c1", "bash"])
-            self.assertEqual(method, "terminal")
-            self.assertIsNone(port)
+        mock_inside_tmux.assert_called_once_with()
 
-    def test_returns_none_when_not_inside_terminal(self) -> None:
-        """When not inside a terminal, fall back to other methods."""
-        with (
-            unittest.mock.patch("terok.tui.shell_launch.is_inside_tmux", return_value=False),
-            unittest.mock.patch("terok.tui.shell_launch.is_web_mode", return_value=False),
-            unittest.mock.patch(
-                "terok.tui.shell_launch.spawn_terminal_with_command", return_value=False
-            ),
-        ):
-            method, port = launch_login(["podman", "exec", "-it", "c1", "bash"])
-            self.assertEqual(method, "none")
-            self.assertIsNone(port)
+        if expected == ("tmux", None):
+            mock_tmux.assert_called_once_with(SHELL_COMMAND, title="login:c1")
+            mock_spawn_terminal.assert_not_called()
+            mock_spawn_ttyd.assert_not_called()
+            mock_is_web_mode.assert_not_called()
+            return
 
-    def test_web_mode_with_ttyd(self) -> None:
-        """In web mode with ttyd available, launch_login returns ('web', port)."""
-        with (
-            unittest.mock.patch("terok.tui.shell_launch.is_inside_tmux", return_value=False),
-            unittest.mock.patch("terok.tui.shell_launch.is_web_mode", return_value=True),
-            unittest.mock.patch(
-                "terok.tui.shell_launch.spawn_terminal_with_command", return_value=False
-            ),
-            unittest.mock.patch("terok.tui.shell_launch.spawn_ttyd", return_value=12345),
-        ):
-            method, port = launch_login(["podman", "exec", "-it", "c1", "bash"])
-            self.assertEqual(method, "web")
-            self.assertEqual(port, 12345)
+        if patches["is_inside_tmux"]:
+            mock_tmux.assert_called_once_with(SHELL_COMMAND, title="login:c1")
+        else:
+            mock_tmux.assert_not_called()
 
-    def test_web_mode_ttyd_unavailable_falls_back(self) -> None:
-        """In web mode without ttyd, launch_login falls back to ('none', None)."""
-        with (
-            unittest.mock.patch("terok.tui.shell_launch.is_inside_tmux", return_value=False),
-            unittest.mock.patch("terok.tui.shell_launch.is_web_mode", return_value=True),
-            unittest.mock.patch(
-                "terok.tui.shell_launch.spawn_terminal_with_command", return_value=False
-            ),
-            unittest.mock.patch("terok.tui.shell_launch.spawn_ttyd", return_value=None),
-        ):
-            method, port = launch_login(["podman", "exec", "-it", "c1", "bash"])
-            self.assertEqual(method, "none")
-            self.assertIsNone(port)
+        expected_is_web_mode_calls = 1 if expected == ("terminal", None) else 2
+        if patches["is_web_mode"]:
+            assert mock_is_web_mode.call_count == expected_is_web_mode_calls
+            mock_spawn_terminal.assert_not_called()
+            mock_spawn_ttyd.assert_called_once_with(SHELL_COMMAND)
+        else:
+            assert mock_is_web_mode.call_count == expected_is_web_mode_calls
+            mock_spawn_terminal.assert_called_once_with(SHELL_COMMAND, title="login:c1")
+            mock_spawn_ttyd.assert_not_called()

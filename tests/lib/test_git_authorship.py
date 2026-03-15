@@ -3,20 +3,24 @@
 
 """Tests for terok's shared Git authorship helper script."""
 
+from __future__ import annotations
+
 import json
 import shlex
 import subprocess
-import unittest
 from importlib import resources
 
+import pytest
 
-class GitAuthorshipHelperTests(unittest.TestCase):
-    """Verify the shared shell helper applies the configured authorship modes."""
+SCRIPT_TIMEOUT_SECONDS = 15
+"""Timeout for the shell-based Git authorship helper smoke test."""
 
-    def _apply_mode(self, mode: str) -> dict[str, str | None]:
-        helper = resources.files("terok") / "resources" / "scripts" / "terok-git-identity.sh"
-        with resources.as_file(helper) as helper_path:
-            shell = f"""
+
+def apply_mode(mode: str) -> dict[str, str | None]:
+    """Run the shared helper in a shell and capture the resulting Git env."""
+    helper = resources.files("terok") / "resources" / "scripts" / "terok-git-identity.sh"
+    with resources.as_file(helper) as helper_path:
+        shell = f"""
 set -euo pipefail
 . {shlex.quote(str(helper_path))}
 export HUMAN_GIT_NAME="Alice Example"
@@ -38,43 +42,67 @@ keys = (
 print(json.dumps({{key: os.environ.get(key) for key in keys}}))
 PY
 """
-            result = subprocess.run(
-                ["bash", "-lc", shell],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        return json.loads(result.stdout)
+        result = subprocess.run(
+            ["bash", "-lc", shell],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=SCRIPT_TIMEOUT_SECONDS,
+        )
+    return json.loads(result.stdout)
 
-    def test_agent_human_mode(self) -> None:
-        env = self._apply_mode("agent-human")
-        self.assertEqual(env["GIT_AUTHOR_NAME"], "Codex")
-        self.assertEqual(env["GIT_AUTHOR_EMAIL"], "noreply@openai.com")
-        self.assertEqual(env["GIT_COMMITTER_NAME"], "Alice Example")
-        self.assertEqual(env["GIT_COMMITTER_EMAIL"], "alice@example.com")
 
-    def test_human_agent_mode(self) -> None:
-        env = self._apply_mode("human-agent")
-        self.assertEqual(env["GIT_AUTHOR_NAME"], "Alice Example")
-        self.assertEqual(env["GIT_AUTHOR_EMAIL"], "alice@example.com")
-        self.assertEqual(env["GIT_COMMITTER_NAME"], "Codex")
-        self.assertEqual(env["GIT_COMMITTER_EMAIL"], "noreply@openai.com")
-
-    def test_human_mode_sets_both_to_human(self) -> None:
-        env = self._apply_mode("human")
-        self.assertEqual(env["GIT_AUTHOR_NAME"], "Alice Example")
-        self.assertEqual(env["GIT_AUTHOR_EMAIL"], "alice@example.com")
-        self.assertEqual(env["GIT_COMMITTER_NAME"], "Alice Example")
-        self.assertEqual(env["GIT_COMMITTER_EMAIL"], "alice@example.com")
-
-    def test_agent_mode_sets_both_to_agent(self) -> None:
-        env = self._apply_mode("agent")
-        self.assertEqual(env["GIT_AUTHOR_NAME"], "Codex")
-        self.assertEqual(env["GIT_AUTHOR_EMAIL"], "noreply@openai.com")
-        self.assertEqual(env["GIT_COMMITTER_NAME"], "Codex")
-        self.assertEqual(env["GIT_COMMITTER_EMAIL"], "noreply@openai.com")
-
-    def test_invalid_mode_falls_back_to_agent_human(self) -> None:
-        env = self._apply_mode("invalid-mode")
-        self.assertEqual(env["GIT_AUTHOR_NAME"], "Codex")
-        self.assertEqual(env["GIT_COMMITTER_NAME"], "Alice Example")
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (
+            "agent-human",
+            {
+                "GIT_AUTHOR_NAME": "Codex",
+                "GIT_AUTHOR_EMAIL": "noreply@openai.com",
+                "GIT_COMMITTER_NAME": "Alice Example",
+                "GIT_COMMITTER_EMAIL": "alice@example.com",
+            },
+        ),
+        (
+            "human-agent",
+            {
+                "GIT_AUTHOR_NAME": "Alice Example",
+                "GIT_AUTHOR_EMAIL": "alice@example.com",
+                "GIT_COMMITTER_NAME": "Codex",
+                "GIT_COMMITTER_EMAIL": "noreply@openai.com",
+            },
+        ),
+        (
+            "human",
+            {
+                "GIT_AUTHOR_NAME": "Alice Example",
+                "GIT_AUTHOR_EMAIL": "alice@example.com",
+                "GIT_COMMITTER_NAME": "Alice Example",
+                "GIT_COMMITTER_EMAIL": "alice@example.com",
+            },
+        ),
+        (
+            "agent",
+            {
+                "GIT_AUTHOR_NAME": "Codex",
+                "GIT_AUTHOR_EMAIL": "noreply@openai.com",
+                "GIT_COMMITTER_NAME": "Codex",
+                "GIT_COMMITTER_EMAIL": "noreply@openai.com",
+            },
+        ),
+        (
+            "invalid-mode",
+            {
+                "GIT_AUTHOR_NAME": "Codex",
+                "GIT_AUTHOR_EMAIL": "noreply@openai.com",
+                "GIT_COMMITTER_NAME": "Alice Example",
+                "GIT_COMMITTER_EMAIL": "alice@example.com",
+            },
+        ),
+    ],
+    ids=["agent-human", "human-agent", "human", "agent", "invalid-falls-back"],
+)
+def test_git_authorship_helper_modes(mode: str, expected: dict[str, str]) -> None:
+    """The helper applies the expected author/committer mapping for each mode."""
+    assert apply_mode(mode) == expected
