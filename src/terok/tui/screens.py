@@ -1117,6 +1117,7 @@ class TaskDetailsScreen(screen.Screen[str | None]):
 
         options: list[Option | None] = [
             Option("Start CLI task  \\[N]  (new task + run CLI)", id="task_start_cli"),
+            Option("Start \\[T]oad task  (new task + browser TUI)", id="task_start_toad"),
         ]
         if is_experimental():
             options.append(Option("Start \\[W]eb task  (new task + run Web)", id="task_start_web"))
@@ -1129,8 +1130,7 @@ class TaskDetailsScreen(screen.Screen[str | None]):
                 options.append(Option("view \\[f]ormatted logs", id="follow_logs"))
             options.append(None)
             options.append(Option("run \\[c]li agent", id="cli"))
-            if is_experimental():
-                options.append(Option("run \\[w]eb UI", id="web"))
+            options.append(Option("run \\[w]eb Toad (browser)", id="toad"))
             options.append(Option("\\[r]estart container", id="restart"))
             if (
                 self._task_meta
@@ -1186,6 +1186,7 @@ class TaskDetailsScreen(screen.Screen[str | None]):
         # Shift keys (uppercase) — N/A/C always available, H/P/X/D require tasks
         shift_map: dict[str, str] = {
             "N": "task_start_cli",
+            "T": "task_start_toad",
             "A": "task_start_autopilot",
             "C": "new",
             "H": "diff_head",
@@ -1205,14 +1206,13 @@ class TaskDetailsScreen(screen.Screen[str | None]):
         # Lowercase keys — all require tasks to exist
         lower_map: dict[str, str] = {
             "c": "cli",
+            "w": "toad",
             "r": "restart",
             "l": "login",
             "u": "followup",
             "n": "rename",
             "s": "shield_up",
         }
-        if is_experimental():
-            lower_map["w"] = "web"
         if key in lower_map:
             if not self._has_tasks:
                 return
