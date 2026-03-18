@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2025 Jiri Vyskocil
+# SPDX-FileCopyrightText: 2026 Andreas Knüpfer
 # SPDX-License-Identifier: Apache-2.0
 
 """Authentication workflows for AI coding agents.
@@ -179,6 +180,26 @@ _ALL_PROVIDERS: list[AuthProvider] = [
             "You will be prompted to enter your Blablador API key.\n"
             "Get your API key at: "
             "https://codebase.helmholtz.cloud/-/user_settings/personal_access_tokens"
+        ),
+    ),
+    AuthProvider(
+        name="kisski",
+        label="KISSKI",
+        host_dir_name="_kisski-config",
+        container_mount="/home/dev/.kisski",
+        command=_api_key_command(
+            AuthKeyConfig(
+                label="KISSKI",
+                key_url="https://chat-ai.academiccloud.de/",
+                env_var="KISSKI_API_KEY",
+                config_path="~/.kisski/config.json",
+                printf_template='{"api_key": "%s"}',
+                tool_name="kisski",
+            )
+        ),
+        banner_hint=(
+            "You will be prompted to enter your KISSKI API key.\n"
+            "Get your API key at: https://chat-ai.academiccloud.de/"
         ),
     ),
     AuthProvider(

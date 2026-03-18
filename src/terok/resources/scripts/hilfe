@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-FileCopyrightText: 2026 Andreas Knüpfer
 # SPDX-License-Identifier: Apache-2.0
 
 # terok container help banner. Called on login as:
@@ -33,8 +34,10 @@ _terok_agents() {
     printf '  \033[36mcopilot\033[0m    - GitHub Copilot CLI\n'
     printf '  \033[36mvibe\033[0m       - Mistral Vibe CLI\n'
     printf '  \033[36mblablador\033[0m  - OpenCode with Helmholtz Blablador\n'
+    printf '  \033[36mkisski\033[0m     - OpenCode with KISSKI\n'
     printf '  \033[36mopencode\033[0m   - OpenCode CLI (\033[2mterokctl config import-opencode\033[0m)\n'
     printf '  \033[36mblablatoad\033[0m - Blablador via Toad ACP\n'
+    printf '  \033[36mkisskitoad\033[0m  - KISSKI via Toad ACP\n'
     printf '  \033[36mtoad\033[0m       - Multi-agent TUI (ACP)\n'
 }
 

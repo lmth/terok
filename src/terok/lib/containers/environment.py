@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-FileCopyrightText: 2026 Andreas Knüpfer
 # SPDX-License-Identifier: Apache-2.0
 
 """Container environment and volume assembly for task containers.
@@ -44,6 +45,7 @@ SHARED_MOUNTS: tuple[SharedMount, ...] = (
     SharedMount("claude", "_claude-config", "Claude config", "/home/dev/.claude"),
     SharedMount("vibe", "_vibe-config", "Vibe config", "/home/dev/.vibe"),
     SharedMount("blablador", "_blablador-config", "Blablador config", "/home/dev/.blablador"),
+    SharedMount("kisski", "_kisski-config", "KISSKI config", "/home/dev/.kisski"),
     SharedMount(
         "opencode_config", "_opencode-config", "OpenCode config", "/home/dev/.config/opencode"
     ),
