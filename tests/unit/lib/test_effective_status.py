@@ -10,24 +10,26 @@ from unittest.mock import patch
 
 import pytest
 
-from terok.lib.containers.runtime import get_project_container_states
-from terok.lib.containers.task_display import (
+from terok.lib.core.task_display import (
     STATUS_DISPLAY,
+    TaskState,
     effective_status,
     mode_info,
 )
-from terok.lib.containers.tasks import TaskMeta, get_all_task_states
+from terok.lib.orchestration.tasks import TaskMeta, get_all_task_states
+from terok.lib.sandbox.runtime import get_project_container_states
 
 
 def _task(**kwargs: object) -> TaskMeta:
     """Build a ``TaskMeta`` with sensible defaults overridden by *kwargs*."""
-    defaults = {
+    defaults: dict[str, object] = {
         "task_id": "1",
         "mode": None,
         "workspace": "",
         "web_port": None,
     }
     defaults.update(kwargs)
+    defaults.setdefault("initialized", defaults["mode"] is not None)
     return TaskMeta(**defaults)
 
 
@@ -92,9 +94,53 @@ def test_all_effective_status_values_have_display_info() -> None:
 )
 def test_mode_info_cases(task_kwargs: dict[str, object], emoji: str, label: str) -> None:
     """``mode_info`` resolves direct modes and web backends into display metadata."""
-    info = mode_info(_task(**task_kwargs))
+    info = mode_info(_task(**task_kwargs).mode)
     assert info.emoji == emoji
     assert info.label == label
+
+
+# ── TaskState / TaskMeta inheritance tests ────────────────────────
+
+
+class TestTaskStateInheritance:
+    """Verify the TaskState → TaskMeta inheritance contract."""
+
+    def test_task_meta_is_task_state(self) -> None:
+        """TaskMeta instances are valid TaskState instances."""
+        meta = _task(mode="cli")
+        assert isinstance(meta, TaskState)
+
+    def test_effective_status_accepts_bare_task_state(self) -> None:
+        """effective_status works with a plain TaskState, not just TaskMeta."""
+        state = TaskState(container_state="running", initialized=True)
+        assert effective_status(state) == "running"
+
+    def test_task_state_defaults(self) -> None:
+        """TaskState fields default to 'not yet started' values."""
+        state = TaskState()
+        assert state.container_state is None
+        assert state.exit_code is None
+        assert state.deleting is False
+        assert state.initialized is False
+        assert effective_status(state) == "created"
+
+    def test_initialized_controls_init_vs_running(self) -> None:
+        """A running container shows 'init' until initialized is set."""
+        uninit = TaskState(container_state="running", initialized=False)
+        assert effective_status(uninit) == "init"
+
+        ready = TaskState(container_state="running", initialized=True)
+        assert effective_status(ready) == "running"
+
+    def test_task_meta_status_property_delegates(self) -> None:
+        """TaskMeta.status property delegates to effective_status."""
+        meta = _task(mode="run", container_state="running")
+        assert meta.status == effective_status(meta)
+
+    def test_mode_info_with_unknown_mode(self) -> None:
+        """Unknown mode strings fall back to the None display entry."""
+        info = mode_info("nonexistent")
+        assert info == mode_info(None)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +179,7 @@ def test_get_project_container_states_handles_output_and_errors(
 ) -> None:
     """Project-wide state lookup parses output and degrades cleanly on errors."""
     patch_kwargs = {"side_effect": error} if error else {"return_value": output}
-    with patch("terok.lib.containers.runtime.subprocess.check_output", **patch_kwargs):
+    with patch("terok.lib.sandbox.runtime.subprocess.check_output", **patch_kwargs):
         assert get_project_container_states("proj") == expected
 
 
@@ -165,7 +211,7 @@ def test_get_all_task_states_maps_project_container_lookup(
 ) -> None:
     """Task-state lookup maps batch project container states back to task IDs."""
     with patch(
-        "terok.lib.containers.tasks.get_project_container_states",
+        "terok.lib.orchestration.tasks.get_project_container_states",
         return_value=container_states,
     ) as mocked_get_states:
         assert get_all_task_states("proj", tasks) == expected

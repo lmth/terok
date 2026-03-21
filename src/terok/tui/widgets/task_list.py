@@ -8,8 +8,8 @@ from typing import Any
 from textual.message import Message
 from textual.widgets import ListItem, ListView, Static
 
-from ...lib.containers.task_display import STATUS_DISPLAY, mode_info
-from ...lib.containers.tasks import TaskMeta
+from ...lib.core.task_display import STATUS_DISPLAY, mode_info
+from ...lib.orchestration.tasks import TaskMeta
 from ...lib.util.emoji import render_emoji
 
 
@@ -69,7 +69,7 @@ class TaskList(ListView):
 
     def _format_task_label(self, task: TaskMeta) -> str:
         """Build a human-readable label string for a task list entry."""
-        m_emoji = render_emoji(mode_info(task))
+        m_emoji = render_emoji(mode_info(task.mode))
         s_info = STATUS_DISPLAY.get(task.status, STATUS_DISPLAY["created"])
         s_emoji = render_emoji(s_info)
 

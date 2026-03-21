@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from terok.lib.containers.project_state import get_project_state
 from terok.lib.core.config import build_root, state_root
 from terok.lib.core.projects import list_projects, load_project
+from terok.lib.domain.project_state import get_project_state
 from tests.test_utils import project_env, write_project
 
 
@@ -192,9 +192,7 @@ class TestProject:
             gate_dir.mkdir(parents=True, exist_ok=True)
 
             with (
-                unittest.mock.patch(
-                    "terok.lib.containers.project_state.subprocess.run"
-                ) as run_mock,
+                unittest.mock.patch("terok.lib.domain.project_state.subprocess.run") as run_mock,
                 unittest.mock.patch(
                     "terok.lib.core.projects._get_global_git_config", return_value=None
                 ),
