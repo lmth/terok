@@ -27,8 +27,8 @@ facade.get_project("myproj")  →  Project          (Aggregate Root)
 | `Task` | `lib.task` | Entity | Wraps `TaskMeta` with lifecycle methods (run, stop, delete, rename, logs). |
 | `ProjectConfig` | `lib.core.project_model` | Value Object | Configuration dataclass loaded from `project.yml`. No behavior. |
 | `TaskMeta` | `lib.containers.tasks` | Value Object | Task metadata snapshot (ID, mode, status, workspace path). |
-| `GitGate` | `lib.security.git_gate` | Repository + Gateway | Manages the bare git mirror; wraps git CLI. |
-| `SSHManager` | `lib.security.ssh` | Service | Generates SSH keypairs and config for container mounts. |
+| `GitGate` | `terok_sandbox.git_gate` | Repository + Gateway | Manages the bare git mirror; wraps git CLI. |
+| `SSHManager` | `terok_sandbox.ssh` | Service | Generates SSH keypairs and config for container mounts. |
 | `AgentManager` | `lib.project` | Strategy + Config Stack | Resolves layered agent configuration and provider selection. |
 
 ### Design Principles
@@ -45,13 +45,24 @@ facade.get_project("myproj")  →  Project          (Aggregate Root)
 
 ### Module Boundaries
 
-Module dependencies are enforced by [tach](https://github.com/gauge-sh/tach) via `tach.toml`. The key constraint: **presentation modules** (CLI, TUI) depend on the facade and domain objects, but never reach into container/security internals directly. The domain objects depend on service modules but not on presentation. Presentation modules may also import `lib.core.projects` directly for raw config access (`load_project`, `ProjectConfig`).
+Module dependencies are enforced by [tach](https://github.com/gauge-sh/tach) via `tach.toml`. The key constraints:
+
+- **Presentation** (CLI, TUI) depends on the facade — never reaches into orchestration or the sandbox directly.
+- **Orchestration** imports directly from the external `terok_sandbox` package for container lifecycle, shield, gate server, and SSH.
+- **Domain** (facade) re-exports sandbox APIs for presentation consumption and adapts them to the project model.
 
 ```text
 Presentation (CLI, TUI)
-    ├── depends on → lib.facade, lib.project, lib.task
-    │                    └── depends on → lib.containers.*, lib.security.*, lib.core.*
-    └── allowed for raw config → lib.core.projects (load_project, ProjectConfig)
+    └── depends on → domain.facade (stable API boundary)
+
+Domain (facade, Project, Task)
+    └── depends on → orchestration, terok_sandbox (re-exported for presentation)
+
+Orchestration (task_runners, tasks, environment)
+    └── depends on → terok_sandbox.* (external package — runtime, shield, gate, SSH)
+
+terok_sandbox (external)
+    └── depends on → terok_shield (external)
 ```
 
 ---
@@ -79,8 +90,8 @@ The host follows logs and detaches when either of these markers appears, or afte
 
 | File | Purpose |
 |------|---------|
-| `src/terok/lib/containers/task_runners.py` | Host-side logic: `task_run_cli`, `task_run_headless` |
-| `src/terok/lib/containers/runtime.py` | Container state, log streaming: `stream_initial_logs`, `wait_for_exit` |
+| `src/terok/lib/orchestration/task_runners.py` | Host-side logic: `task_run_cli`, `task_run_headless` |
+| `terok_sandbox.runtime` (external) | Container state, log streaming: `stream_initial_logs`, `wait_for_exit` |
 | `src/terok/resources/scripts/init-ssh-and-repo.sh` | CLI init marker, SSH setup, repo sync |
 
 **Important**: Changes to startup output or listening ports can affect readiness detection. Keep the readiness semantics stable or adjust terok's detection accordingly.

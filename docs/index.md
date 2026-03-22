@@ -1,6 +1,13 @@
 # terok
 
-A tool for managing containerized AI coding agent projects using Podman. Provides both a CLI (`terokctl`) and a Textual TUI (`terok`).
+Orchestration and instrumentation platform for containerized AI coding agents.
+Provides both a CLI (`terokctl`) and a Textual TUI (`terok`).
+
+terok manages the *what* — which agents run, how they're configured, and
+what code they work on.  The hardened container runtime
+([terok-sandbox](https://github.com/terok-ai/terok-sandbox)) manages the
+*how* — Podman isolation, egress firewalling, gated git access, and SSH
+provisioning.
 
 ## Features
 
@@ -11,9 +18,7 @@ A tool for managing containerized AI coding agent projects using Podman. Provide
 - **Task Lifecycle**: Create, run, stop, restart, follow up, and archive tasks
 - **Security Modes**: Online and gatekeeping modes for different trust levels
 - **Container Layers**: Efficient three-layer Docker image architecture (L0/L1/L2)
-- **Gate Server**: Host-side git gate with systemd socket activation for gatekeeping workflows
-- **SSH Integration**: Automatic SSH key management for private Git repositories
-- **GPU Passthrough**: Per-project NVIDIA GPU support
+- **Hardened Runtime**: Defence-in-depth via [terok-sandbox](https://github.com/terok-ai/terok-sandbox) — egress firewall, gated git access, SSH isolation, GPU passthrough
 - **Agent Instructions**: Layered, inheritable instruction system delivered to every task
 - **Interactive TUI**: Full-featured Textual interface with project/task management, log viewing, and login sessions
 

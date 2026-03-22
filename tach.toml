@@ -204,6 +204,7 @@ depends_on = [
     "terok.lib.core.config",
     "terok.lib.core.images",
     "terok.lib.core.projects",
+    "terok.lib.core.task_display",
     "terok.lib.util.ansi",
     "terok.lib.util.podman",
     "terok.lib.util.yaml",

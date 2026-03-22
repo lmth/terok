@@ -1,9 +1,11 @@
 # Shield Security Guide
 
 The **shield** is an egress firewall that restricts outbound network access
-from task containers using nftables OCI hooks.  It is a core part of terok's
-security model.  This page explains **what you lose** when the shield is
-weakened or absent.
+from task containers using nftables OCI hooks.  It is provided by
+[terok-shield](https://github.com/terok-ai/terok-shield) and integrated
+into terok through the
+[terok-sandbox](https://github.com/terok-ai/terok-sandbox) runtime layer.
+This page explains **what you lose** when the shield is weakened or absent.
 
 ---
 

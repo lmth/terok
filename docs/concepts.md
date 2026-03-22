@@ -55,8 +55,16 @@ options to tune the exact trade-off within each.
 
 ## Architecture Overview
 
-Every terok deployment has the same core components. The arrows show how
-code flows between them:
+terok is split into two packages:
+
+- **terok** — orchestration and instrumentation: agent configuration,
+  task lifecycle, image building, instructions, presets, CLI and TUI.
+- **[terok-sandbox](https://github.com/terok-ai/terok-sandbox)** — hardened
+  container runtime: Podman lifecycle, egress firewall (via
+  [terok-shield](https://github.com/terok-ai/terok-shield)), gated git
+  access, SSH key provisioning.
+
+The arrows show how code flows between components:
 
 ```mermaid
 graph TD
@@ -66,11 +74,16 @@ graph TD
     GATE -- "promote (human)" --> UPSTREAM
 
     subgraph HOST [Host Machine]
-        TEROK["terok — CLI + TUI"]
-        GATE["Git Gate (bare mirror)"]
-        SHIELD["Shield (egress firewall)"]
+        TEROK["terok — CLI + TUI<br/><i>orchestration &amp; instrumentation</i>"]
+
+        subgraph SANDBOX ["terok-sandbox (hardened runtime)"]
+            GATE["Git Gate (bare mirror)"]
+            SHIELD["Shield (egress firewall)"]
+            SSH["SSH key provisioning"]
+        end
+
         SHARED["Shared Dirs (credentials)"]
-        TEROK --> GATE
+        TEROK --> SANDBOX
     end
 
     GATE -- "clone (HTTP)" --> TASK_A
@@ -264,8 +277,9 @@ with sensitive codebases.
 
 ## SSH Keys and Who Knows What
 
-SSH keys control access to private git repositories. terok generates a
-separate key per project and carefully controls where it is mounted.
+SSH keys control access to private git repositories. terok-sandbox
+generates a separate key per project; terok controls where keys are
+mounted based on the project's security mode.
 
 ```mermaid
 graph TB
@@ -307,9 +321,11 @@ upstream). The key question is whether the **container** also has it.
 
 ## The Shield (Egress Firewall)
 
-The **shield** is an nftables-based egress firewall that restricts outbound
-network connections from containers. It works via Podman OCI hooks — rules
-are applied automatically when containers start.
+The **shield** is an nftables-based egress firewall provided by
+[terok-shield](https://github.com/terok-ai/terok-shield) and integrated
+through terok-sandbox. It restricts outbound network connections from
+containers via Podman OCI hooks — rules are applied automatically when
+containers start.
 
 ```mermaid
 graph LR
@@ -362,8 +378,8 @@ threat model.
 
 ## Defence in Depth
 
-No single security layer is sufficient. terok combines multiple
-independent layers, each covering different attack vectors:
+No single security layer is sufficient. terok and terok-sandbox combine
+multiple independent layers, each covering different attack vectors:
 
 ```mermaid
 graph TB

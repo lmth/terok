@@ -5,9 +5,10 @@
 > Do not expose terok-in-Docker to the public internet or use it in production.
 > For production use, install terok natively on a host with Podman.
 
-terok-in-Docker runs the full terok stack — web TUI, gate server, and
-rootless Podman — inside a single Docker container.  This lets you try
-terok without installing Podman on your host.
+terok-in-Docker runs the full terok stack — web TUI, terok-sandbox
+runtime (gate server, shield), and rootless Podman — inside a single
+Docker container.  This lets you try terok without installing Podman on
+your host.
 
 ## Quick start
 

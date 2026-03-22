@@ -1,6 +1,8 @@
 # Git Gate and Security Modes
 
-The **git gate** is a host-side bare mirror of the upstream repository. It serves two purposes depending on the project's security mode:
+The **git gate** is a host-side bare mirror of the upstream repository,
+managed by [terok-sandbox](https://github.com/terok-ai/terok-sandbox).
+It serves two purposes depending on the project's security mode:
 
 - **Online mode** — performance accelerator for cloning (the gate is not used for security; containers talk to upstream directly)
 - **Gatekeeping mode** — the default git origin for containers, directing agent pushes to the gate instead of upstream

@@ -33,6 +33,7 @@ from ..core.config import (
 )
 from ..core.images import project_cli_image
 from ..core.projects import load_project
+from ..core.task_display import has_gpu
 from ..instrumentation.agent_config import resolve_agent_config, resolve_provider_value
 from ..instrumentation.agents import AgentConfigSpec, prepare_agent_config_dir
 from ..instrumentation.instructions import resolve_instructions
@@ -341,7 +342,7 @@ def _run_container(
     else:
         cmd += _shield_pre_start_impl(cname, task_dir)
 
-    cmd += gpu_run_args(project.root)
+    cmd += gpu_run_args(enabled=has_gpu(project))
     if extra_args:
         cmd += extra_args
     for v in volumes:
