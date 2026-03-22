@@ -9,6 +9,7 @@ import subprocess
 from unittest.mock import patch
 
 import pytest
+from terok_sandbox.runtime import get_project_container_states
 
 from terok.lib.core.task_display import (
     STATUS_DISPLAY,
@@ -17,7 +18,6 @@ from terok.lib.core.task_display import (
     mode_info,
 )
 from terok.lib.orchestration.tasks import TaskMeta, get_all_task_states
-from terok.lib.sandbox.runtime import get_project_container_states
 
 
 def _task(**kwargs: object) -> TaskMeta:
@@ -179,7 +179,7 @@ def test_get_project_container_states_handles_output_and_errors(
 ) -> None:
     """Project-wide state lookup parses output and degrades cleanly on errors."""
     patch_kwargs = {"side_effect": error} if error else {"return_value": output}
-    with patch("terok.lib.sandbox.runtime.subprocess.check_output", **patch_kwargs):
+    with patch("terok_sandbox.runtime.subprocess.check_output", **patch_kwargs):
         assert get_project_container_states("proj") == expected
 
 
