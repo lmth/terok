@@ -142,7 +142,7 @@ The workspace is the task's private copy of the codebase, mounted at
 `/workspace` inside the container. On the host it lives at:
 
 ```text
-~/.local/share/terok/tasks/<project>/<task_id>/workspace-dangerous/
+~/.local/share/terok/core/tasks/<project>/<task_id>/workspace-dangerous/
 ```
 
 The `-dangerous` suffix is a deliberate reminder: this directory contains
@@ -284,7 +284,7 @@ are served to containers via the credential proxy's SSH agent.
 ```mermaid
 graph TB
     subgraph HOST ["Host"]
-        SSH["Per-project SSH key<br/><code>~/.local/share/terok/<br/>ssh-keys/&lt;project&gt;/</code>"]
+        SSH["Per-project SSH key<br/><code>~/.local/share/terok/core/<br/>ssh-keys/&lt;project&gt;/</code>"]
         PROXY["SSH Agent Proxy"]
         GATE["Git Gate"]
     end
@@ -431,7 +431,7 @@ These are shared by **all tasks across all projects** and contain
 agent credentials and configuration:
 
 ```text
-~/.local/share/terok/envs/
+~/.local/share/terok/agent/mounts/
 ├── _claude-config/    → /home/dev/.claude      (Claude Code)
 ├── _codex-config/     → /home/dev/.codex       (Codex)
 ├── _vibe-config/      → /home/dev/.vibe        (Mistral Vibe)
@@ -448,7 +448,7 @@ credentials are available in all future containers.
 SSH keys are scoped per project and stored on the host only:
 
 ```text
-~/.local/share/terok/ssh-keys/
+~/.local/share/terok/core/ssh-keys/
 └── myproject/
     ├── id_ed25519        (private — never leaves the host)
     ├── id_ed25519.pub
@@ -463,7 +463,7 @@ Keys are served to containers via the SSH agent proxy.
 The workspace itself is private to each task:
 
 ```text
-~/.local/share/terok/tasks/<project>/<task_id>/
+~/.local/share/terok/core/tasks/<project>/<task_id>/
 ├── workspace-dangerous/  → /workspace          (repo clone)
 ├── agent-config/                                (agent state)
 └── shield/                                      (firewall audit logs)

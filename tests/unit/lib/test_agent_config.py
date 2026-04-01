@@ -92,7 +92,7 @@ def write_project_preset(
 
 def user_presets_dir(layout: AgentConfigLayout) -> Path:
     """Return the global XDG presets directory."""
-    presets_dir = layout.xdg_config_home / "terok" / "presets"
+    presets_dir = layout.xdg_config_home / "terok" / "core" / "presets"
     presets_dir.mkdir(parents=True, exist_ok=True)
     return presets_dir
 

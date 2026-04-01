@@ -171,9 +171,11 @@ def state_dir() -> Path:
     Precedence:
     - Environment variable TEROK_STATE_DIR (handled first)
     - If set in global config (paths.state_dir), use it.
-    - Otherwise, use terok.lib.paths.state_root() (FHS/XDG handling).
+    - Otherwise, ``state_root() / "core"`` (umbrella subdir for terok-core data).
     """
-    return _resolve_path("TEROK_STATE_DIR", ("paths", "state_dir"), _state_root_base)
+    return _resolve_path(
+        "TEROK_STATE_DIR", ("paths", "state_dir"), lambda: _state_root_base() / "core"
+    )
 
 
 def gate_repos_dir() -> Path:
@@ -213,10 +215,12 @@ def user_presets_dir() -> Path:
 
     Precedence:
     - Global config: paths.user_presets_dir
-    - XDG_CONFIG_HOME/terok/presets
-    - ~/.config/terok/presets
+    - XDG_CONFIG_HOME/terok/core/presets
+    - ~/.config/terok/core/presets
     """
-    return _resolve_path(None, ("paths", "user_presets_dir"), lambda: _xdg_config_subdir("presets"))
+    return _resolve_path(
+        None, ("paths", "user_presets_dir"), lambda: _xdg_config_subdir("core") / "presets"
+    )
 
 
 def bundled_presets_dir() -> Path:
@@ -253,11 +257,11 @@ def get_ui_base_port() -> int:
 def credentials_dir() -> Path:
     """Return the base directory for shared credentials.
 
-    Global config (terok-config.yml):
-      credentials:
-        dir: ~/.local/share/terok-credentials  # or /var/lib/terok-credentials for root
-
-    Default: ``credentials_root()`` from ``terok.lib.paths``.
+    Precedence:
+    - ``TEROK_CREDENTIALS_DIR`` environment variable.
+    - Global config ``credentials.dir``.
+    - ``credentials_root()`` → ``~/.local/share/terok/credentials``
+      (or ``/var/lib/terok/credentials`` for root).
     """
     return _resolve_path("TEROK_CREDENTIALS_DIR", ("credentials", "dir"), _credentials_root_base)
 

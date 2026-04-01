@@ -30,17 +30,17 @@ class TestCredentialsRoot:
         assert result == Path.home() / "my-creds"
 
     def test_root_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Root user gets /var/lib/terok-credentials."""
+        """Root user gets /var/lib/terok/credentials."""
         monkeypatch.delenv("TEROK_CREDENTIALS_DIR", raising=False)
         monkeypatch.setattr(paths, "_is_root", lambda: True)
-        assert paths.credentials_root() == Path("/var/lib/terok-credentials")
+        assert paths.credentials_root() == Path("/var/lib/terok/credentials")
 
     def test_platformdirs_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-root with platformdirs delegates to user_data_dir."""
         monkeypatch.delenv("TEROK_CREDENTIALS_DIR", raising=False)
         monkeypatch.setattr(paths, "_is_root", lambda: False)
         monkeypatch.setattr(paths, "_user_data_dir", lambda name: f"{MOCK_BASE}/data/{name}")
-        assert paths.credentials_root() == Path(f"{MOCK_BASE}/data/terok-credentials")
+        assert paths.credentials_root() == MOCK_BASE / "data" / "terok" / "credentials"
 
     def test_xdg_data_home_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without platformdirs, XDG_DATA_HOME is honored."""
@@ -48,24 +48,31 @@ class TestCredentialsRoot:
         monkeypatch.setattr(paths, "_is_root", lambda: False)
         monkeypatch.setattr(paths, "_user_data_dir", None)
         monkeypatch.setenv("XDG_DATA_HOME", str(MOCK_BASE / "xdg-data"))
-        assert paths.credentials_root() == MOCK_BASE / "xdg-data" / "terok-credentials"
+        assert paths.credentials_root() == MOCK_BASE / "xdg-data" / "terok" / "credentials"
 
     def test_bare_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Last resort: ~/.local/share/terok-credentials."""
+        """Last resort: ~/.local/share/terok/credentials."""
         monkeypatch.delenv("TEROK_CREDENTIALS_DIR", raising=False)
         monkeypatch.delenv("XDG_DATA_HOME", raising=False)
         monkeypatch.setattr(paths, "_is_root", lambda: False)
         monkeypatch.setattr(paths, "_user_data_dir", None)
-        assert paths.credentials_root() == Path.home() / ".local" / "share" / "terok-credentials"
+        assert (
+            paths.credentials_root() == Path.home() / ".local" / "share" / "terok" / "credentials"
+        )
 
 
-class TestCredentialsAppName:
-    """Verify the credentials namespace constant."""
+class TestCredentialsUmbrella:
+    """Verify credentials live under the terok/ umbrella."""
 
-    def test_value(self) -> None:
-        """CREDENTIALS_APP_NAME is separate from APP_NAME."""
-        assert paths.CREDENTIALS_APP_NAME == "terok-credentials"
-        assert paths.CREDENTIALS_APP_NAME != paths.APP_NAME
+    def test_default_is_under_umbrella(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default credentials_root() nests under the terok/ umbrella, not a sibling."""
+        monkeypatch.delenv("TEROK_CREDENTIALS_DIR", raising=False)
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        monkeypatch.setattr(paths, "_is_root", lambda: False)
+        monkeypatch.setattr(paths, "_user_data_dir", None)
+        result = paths.credentials_root()
+        assert result.parent.name == "terok"
+        assert result.name == "credentials"
 
 
 class TestConfigRoot:

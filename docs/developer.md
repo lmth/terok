@@ -120,16 +120,16 @@ When a task container starts, terok mounts:
 
 | Container Path | Host Source | Purpose |
 |----------------|-------------|---------|
-| `/workspace` | `<state_root>/tasks/<project>/<task>/workspace-dangerous` | Per-task workspace |
-| `/home/dev/.codex` | `<envs_base>/_codex-config` | Codex credentials |
-| `/home/dev/.claude` | `<envs_base>/_claude-config` | Claude Code credentials |
-| `/home/dev/.vibe` | `<envs_base>/_vibe-config` | Mistral Vibe credentials |
-| `/home/dev/.blablador` | `<envs_base>/_blablador-config` | Blablador credentials + isolated OpenCode config (via `OPENCODE_CONFIG`) |
-| `/home/dev/.config/opencode` | `<envs_base>/_opencode-config` | Plain OpenCode config (use `terok config import-opencode`) |
-| `/home/dev/.local/share/opencode` | `<envs_base>/_opencode-data` | OpenCode data (shared by Blablador and plain OpenCode) |
-| `/home/dev/.local/state` | `<envs_base>/_opencode-state` | OpenCode/Bun state (shared by both) |
-| `/home/dev/.config/gh` | `<envs_base>/_gh-config` | GitHub CLI config |
-| `/home/dev/.config/glab-cli` | `<envs_base>/_glab-config` | GitLab CLI config |
+| `/workspace` | `<state_dir>/tasks/<project>/<task>/workspace-dangerous` | Per-task workspace |
+| `/home/dev/.codex` | `<mounts_dir>/_codex-config` | Codex credentials |
+| `/home/dev/.claude` | `<mounts_dir>/_claude-config` | Claude Code credentials |
+| `/home/dev/.vibe` | `<mounts_dir>/_vibe-config` | Mistral Vibe credentials |
+| `/home/dev/.blablador` | `<mounts_dir>/_blablador-config` | Blablador credentials + isolated OpenCode config (via `OPENCODE_CONFIG`) |
+| `/home/dev/.config/opencode` | `<mounts_dir>/_opencode-config` | Plain OpenCode config (use `terok config import-opencode`) |
+| `/home/dev/.local/share/opencode` | `<mounts_dir>/_opencode-data` | OpenCode data (shared by Blablador and plain OpenCode) |
+| `/home/dev/.local/state` | `<mounts_dir>/_opencode-state` | OpenCode/Bun state (shared by both) |
+| `/home/dev/.config/gh` | `<mounts_dir>/_gh-config` | GitHub CLI config |
+| `/home/dev/.config/glab-cli` | `<mounts_dir>/_glab-config` | GitLab CLI config |
 
 SSH keys are **not** mounted — the credential proxy's SSH agent serves them over TCP.
 

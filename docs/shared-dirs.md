@@ -6,7 +6,7 @@ When a task starts, terok mounts host directories into the container for workspa
 
 ## Per-Task Workspace
 
-- Host path: `<state_root>/tasks/<project_id>/<task_id>/workspace-dangerous`
+- Host path: `<state_dir>/tasks/<project_id>/<task_id>/workspace-dangerous`
 - Mounted as: `<host_dir>:/workspace:Z`
 - Created automatically when the task runs (permissions `700`).
 - The project repository is cloned or synced here by `init-ssh-and-repo.sh`.
@@ -23,10 +23,10 @@ When a task starts, terok mounts host directories into the container for workspa
 These directories are bind-mounted into every task container so that agents and
 tools find their config on startup.  They are created automatically
 on first task launch.  The base dir defaults to
-`~/.local/share/terok-agent/mounts` (override via `TEROK_AGENT_STATE_DIR`).
+`~/.local/share/terok/agent/mounts` (override via `TEROK_AGENT_STATE_DIR`).
 
 > **Trust boundary:** Mount directories are intentionally separated from the
-> credentials store (`~/.local/share/terok-credentials/`) since containers have
+> credentials store (`~/.local/share/terok/credentials/`) since containers have
 > read-write access to mounts and could potentially poison them.
 
 | Host Dir | Container Mount | Purpose |
