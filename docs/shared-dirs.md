@@ -74,6 +74,37 @@ ssh:
 
 Supported tokens: `{{IDENTITY_FILE}}`, `{{KEY_NAME}}`, `{{PROJECT_ID}}`
 
+## Credential Proxy
+
+The credential proxy holds real API keys and OAuth tokens on the host
+and injects **phantom tokens** into containers.  When a container makes
+an API call, the proxy intercepts the phantom token and swaps it for the
+real credential — the actual secret never enters any container.
+
+### Per-task vs shared tokens
+
+| Auth method | Token scope | Notes |
+|-------------|------------|-------|
+| API key (all providers) | Per-task | Each task gets a unique phantom token that is revoked when the task ends. |
+| OAuth (Codex, etc.) | Per-task | Same per-task lifecycle as API keys. |
+| **Claude OAuth** | **Shared** | Uses a static marker token in `.credentials.json` instead of a per-task phantom. All tasks share the same lookup key. |
+
+Claude OAuth is shared because Claude Code determines the subscription
+plan display ("Claude Max", "Claude Pro", etc.) by reading `accessToken`
+from `~/.claude/.credentials.json`.  If the token comes from the
+`CLAUDE_CODE_OAUTH_TOKEN` environment variable instead, Claude Code
+always shows "Claude API" regardless of subscription metadata.  The
+static marker in the file works around this limitation.
+
+**Implications of shared Claude OAuth:**
+
+- The credential applies to **all tasks** in the default credential set
+  — you cannot have per-project or per-task Claude OAuth credentials.
+- The static marker token is not revoked between tasks.  The real OAuth
+  token is still protected by the proxy and refreshed automatically.
+- API key auth for Claude (`terok auth claude` → option 2) remains
+  per-task and is unaffected.
+
 ## Git Identity
 
 terok configures git author/committer identities to distinguish AI-generated commits. The mapping is controlled by `git.authorship` in `project.yml` or global `config.yml`:
