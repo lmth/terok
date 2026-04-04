@@ -178,7 +178,7 @@ def _check_shield_state(task_dir: Path, cname: str) -> _CheckResult:
 
     try:
         shield = make_shield(task_dir)
-        actual_status = shield.status(cname)
+        actual_status = shield.status()
         actual = "up" if actual_status.get("active", False) else "down"
     except Exception as exc:  # noqa: BLE001
         return ("warn", _SHIELD_STATE_LABEL, f"status check failed: {exc}")
