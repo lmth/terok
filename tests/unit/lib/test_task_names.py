@@ -38,7 +38,7 @@ def project_yaml(project_id: str, *, name_categories: list[str] | None = None) -
     return yaml_text
 
 
-def task_meta_name(ctx, project_id: str, task_id: str = "1") -> str:
+def task_meta_name(ctx, project_id: str, task_id: str) -> str:
     """Return the persisted task name from task metadata."""
     meta_path = ctx.state_dir / "projects" / project_id / "tasks" / f"{task_id}.yml"
     return yaml_load(meta_path.read_text())["name"]
@@ -135,7 +135,8 @@ def test_task_new_rejects_invalid_names(bad_name: str) -> None:
     with project_env(project_yaml(project_id), project_id=project_id) as ctx:
         with pytest.raises(SystemExit):
             task_new(project_id, name=bad_name)
-        assert not (ctx.state_dir / "projects" / project_id / "tasks" / "1.yml").exists()
+        tasks_dir = ctx.state_dir / "projects" / project_id / "tasks"
+        assert not tasks_dir.exists() or not list(tasks_dir.glob("*.yml"))
 
 
 def test_task_new_prints_name() -> None:
@@ -166,13 +167,13 @@ def test_task_rename_updates_or_rejects(
     """Task renaming persists the sanitized value or rejects invalid names."""
     project_id = "proj_rename"
     with project_env(project_yaml(project_id), project_id=project_id) as ctx:
-        task_new(project_id, name=initial_name)
+        task_id = task_new(project_id, name=initial_name)
         if raises:
             with pytest.raises(SystemExit):
-                task_rename(project_id, "1", new_name)
+                task_rename(project_id, task_id, new_name)
         else:
-            task_rename(project_id, "1", new_name)
-            assert task_meta_name(ctx, project_id) == expected
+            task_rename(project_id, task_id, new_name)
+            assert task_meta_name(ctx, project_id, task_id) == expected
 
 
 def test_task_rename_unknown_task_raises() -> None:

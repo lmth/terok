@@ -14,6 +14,7 @@ Container runner functions (``task_run_cli``,
 
 import os
 import re
+import secrets
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -28,8 +29,10 @@ from terok_sandbox import (
 from ..core.config import archive_dir, state_dir
 from ..core.projects import ProjectConfig, load_project
 from ..core.task_display import (
+    CONTAINER_MODES,
     STATUS_DISPLAY,
     TaskState,
+    container_name,
     effective_status,
     mode_info,
 )
@@ -47,9 +50,20 @@ from ..util.logging_utils import _log_debug
 from ..util.yaml import dump as _yaml_dump, load as _yaml_load
 from .container_exec import container_git_diff
 
-# ---------- Container naming (orchestration policy) ----------
+# ---------- Task ID generation ----------
 
-CONTAINER_MODES = ("cli", "web", "run", "toad")
+
+_META_GLOB = "*.yml"
+"""Glob pattern for task metadata YAML files."""
+
+
+def _generate_unique_id(existing: set[str]) -> str:
+    """Generate a unique 8-char hex task ID not present in *existing*."""
+    for _ in range(100):
+        candidate = secrets.token_hex(4)
+        if candidate not in existing:
+            return candidate
+    raise RuntimeError("Failed to generate unique task ID after 100 attempts")
 
 
 def _is_initialized(meta: dict) -> bool:
@@ -57,9 +71,25 @@ def _is_initialized(meta: dict) -> bool:
     return "ready_at" in meta
 
 
-def container_name(project_id: str, mode: str, task_id: str) -> str:
-    """Return the canonical container name for a task."""
-    return f"{project_id}-{mode}-{task_id}"
+def resolve_task_id(project_id: str, prefix: str) -> str:
+    """Resolve a (possibly partial) hex task ID to its full 8-char form.
+
+    Raises ``SystemExit`` with an actionable message on zero or multiple matches.
+    """
+    if not re.fullmatch(r"[0-9a-f]{1,8}", prefix):
+        raise SystemExit(f"Invalid task ID prefix {prefix!r}; expected 1-8 lowercase hex chars")
+
+    meta_dir = tasks_meta_dir(project_id)
+    if not meta_dir.is_dir():
+        raise SystemExit(f"No tasks found for project {project_id}")
+    if (meta_dir / f"{prefix}.yml").is_file():
+        return prefix
+    matches = [p.stem for p in meta_dir.glob(_META_GLOB) if p.stem.startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise SystemExit(f"No task matching '{prefix}' in project {project_id}")
+    raise SystemExit(f"Ambiguous task ID '{prefix}' — matches: {', '.join(sorted(matches))}")
 
 
 def get_task_container_state(project_id: str, task_id: str, mode: str | None) -> str | None:
@@ -344,8 +374,8 @@ def _task_new(project: ProjectConfig, *, name: str | None = None) -> str:
     meta_dir = tasks_meta_dir(project.id)
     ensure_dir(meta_dir)
 
-    existing = sorted([p.stem for p in meta_dir.glob("*.yml") if p.stem.isdigit()], key=int)
-    next_id = str(int(existing[-1]) + 1 if existing else 1)
+    existing = {p.stem for p in meta_dir.glob(_META_GLOB)}
+    next_id = _generate_unique_id(existing)
 
     ws = tasks_root / next_id
     ensure_dir(ws)
@@ -448,7 +478,7 @@ def _get_tasks(project_id: str, reverse: bool = False) -> list[TaskMeta]:
         tasks_root = project.tasks_root
     except SystemExit:
         tasks_root = None
-    for f in meta_dir.glob("*.yml"):
+    for f in meta_dir.glob(_META_GLOB):
         try:
             meta = _yaml_load(f.read_text()) or {}
             tid = str(meta.get("task_id", ""))
@@ -484,14 +514,7 @@ def _get_tasks(project_id: str, reverse: bool = False) -> list[TaskMeta]:
             log_warning(f"Skipping malformed task metadata file: {f}: {exc}")
             continue
 
-    def _sort_key(t: TaskMeta) -> tuple[bool, int, str]:
-        """Sort numeric IDs first (ascending), then non-numeric lexically."""
-        try:
-            return (False, int(t.task_id), t.task_id)
-        except (ValueError, TypeError):
-            return (True, 0, t.task_id or "")
-
-    tasks.sort(key=_sort_key, reverse=reverse)
+    tasks.sort(key=lambda t: t.task_id or "", reverse=reverse)
     return tasks
 
 
@@ -570,7 +593,7 @@ def task_list(
         if t.work_status:
             extra.append(f"work={t.work_status}")
         extra_s = f" [{'; '.join(extra)}]" if extra else ""
-        print(f"- {t.task_id:>3}: {t.name} {t_status}{extra_s}")
+        print(f"- {t.task_id}: {t.name} {t_status}{extra_s}")
 
 
 def _check_mode(meta: dict, expected: str) -> None:

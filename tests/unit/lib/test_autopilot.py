@@ -33,7 +33,7 @@ from terok.lib.orchestration.task_runners import (
     task_followup_headless,
     task_run_headless,
 )
-from tests.test_utils import mock_git_config, write_project
+from tests.test_utils import assert_hex_id, mock_git_config, write_project
 
 
 @dataclass
@@ -319,8 +319,8 @@ class TestTaskRunHeadless:
                 HeadlessRunRequest("proj_hl", "Fix the auth bug"),
             )
 
-            assert result.task_id == "1"
-            agent_config_dir, _meta_path = task_paths(base, "proj_hl")
+            assert_hex_id(result.task_id)
+            agent_config_dir, _meta_path = task_paths(base, "proj_hl", result.task_id)
             prompt_file = agent_config_dir / "prompt.txt"
             assert prompt_file.is_file()
             assert prompt_file.read_text() == "Fix the auth bug"
@@ -341,13 +341,13 @@ class TestTaskRunHeadless:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
 
-            run_headless_request(
+            result = run_headless_request(
                 base,
                 write_runner_project(base, "proj_wrap"),
                 HeadlessRunRequest("proj_wrap", "test"),
             )
 
-            wrapper = task_paths(base, "proj_wrap")[0] / "terok-agent.sh"
+            wrapper = task_paths(base, "proj_wrap", result.task_id)[0] / "terok-agent.sh"
             assert wrapper.is_file()
             content = wrapper.read_text()
             assert "claude()" in content
@@ -372,13 +372,13 @@ class TestTaskRunHeadless:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
 
-            run_headless_request(
+            result = run_headless_request(
                 base,
                 write_runner_project(base, "proj_agents", DEFAULT_SUBAGENTS_YAML),
                 HeadlessRunRequest("proj_agents", "test"),
             )
 
-            agents_data = read_task_agents(base, "proj_agents")
+            agents_data = read_task_agents(base, "proj_agents", result.task_id)
             assert isinstance(agents_data, dict)
             assert "reviewer" in agents_data
             assert "debugger" not in agents_data
@@ -389,13 +389,13 @@ class TestTaskRunHeadless:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
 
-            run_headless_request(
+            result = run_headless_request(
                 base,
                 write_runner_project(base, "proj_sel", DEFAULT_SUBAGENTS_YAML),
                 HeadlessRunRequest("proj_sel", "test", agents=["debugger"]),
             )
 
-            agents_data = read_task_agents(base, "proj_sel")
+            agents_data = read_task_agents(base, "proj_sel", result.task_id)
             assert "reviewer" in agents_data
             assert "debugger" in agents_data
 
@@ -415,7 +415,7 @@ class TestTaskRunHeadless:
             assert "--max-turns 100" in bash_cmd
             assert "--terok-timeout" in bash_cmd
 
-            wrapper = task_paths(base, "proj_flags")[0] / "terok-agent.sh"
+            wrapper = task_paths(base, "proj_flags", result.task_id)[0] / "terok-agent.sh"
             content = wrapper.read_text()
             assert "--model" not in content
             assert "--max-turns" not in content
@@ -430,20 +430,21 @@ class TestTaskRunHeadless:
                 write_runner_project(base, "proj_name"),
                 HeadlessRunRequest("proj_name", "test"),
             )
-            assert result.last_spec.container_name == "proj_name-run-1"
+            assert_hex_id(result.task_id)
+            assert result.last_spec.container_name == f"proj_name-run-{result.task_id}"
 
     def test_headless_metadata_updated(self) -> None:
         """task_run_headless sets mode=run and updates status on completion."""
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
 
-            run_headless_request(
+            result = run_headless_request(
                 base,
                 write_runner_project(base, "proj_meta"),
                 HeadlessRunRequest("proj_meta", "test"),
             )
 
-            meta = read_task_meta(base, "proj_meta")
+            meta = read_task_meta(base, "proj_meta", result.task_id)
             assert meta["mode"] == "run"
             assert meta["exit_code"] == 0
 
@@ -459,7 +460,8 @@ class TestTaskRunHeadless:
 
             result.wait_mock.assert_not_called()
             assert "detached" in result.output.lower()
-            assert "proj_nf-run-1" in result.output
+            assert_hex_id(result.task_id)
+            assert f"proj_nf-run-{result.task_id}" in result.output
 
     def test_headless_uses_claude_function_in_command(self) -> None:
         """task_run_headless uses claude wrapper via --terok-timeout."""
@@ -494,13 +496,13 @@ class TestTaskRunHeadless:
                 encoding="utf-8",
             )
 
-            run_headless_request(
+            result = run_headless_request(
                 base,
                 write_runner_project(base, "proj_cfgfile"),
                 HeadlessRunRequest("proj_cfgfile", "test", config_path=str(agent_config)),
             )
 
-            agents_data = read_task_agents(base, "proj_cfgfile")
+            agents_data = read_task_agents(base, "proj_cfgfile", result.task_id)
             assert "extra-agent" in agents_data
             assert agents_data["extra-agent"]["prompt"] == "I am an extra agent"
 
@@ -533,7 +535,7 @@ class TestTaskFollowupHeadless:
                 container_state=["exited", "running"],
             )
 
-            agent_cfg, _meta_path = task_paths(base, "proj_fu")
+            agent_cfg, _meta_path = task_paths(base, "proj_fu", task_id)
             assert (agent_cfg / "prompt.txt").read_text() == "fix the remaining tests"
             history = (agent_cfg / "prompt-history.txt").read_text()
             assert "initial prompt" in history

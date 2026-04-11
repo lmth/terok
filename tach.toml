@@ -181,6 +181,7 @@ depends_on = [
     "terok.lib.core.config",
     "terok.lib.core.images",
     "terok.lib.core.projects",
+    "terok.lib.core.task_display",
 ]
 
 # Interactive project creation
@@ -270,7 +271,7 @@ depends_on = ["terok.lib.util.yaml"]
 [[modules]]
 path = "terok.lib.orchestration.container_exec"
 layer = "orchestration"
-depends_on = ["terok.lib.util.logging_utils"]
+depends_on = ["terok.lib.core.task_display", "terok.lib.util.logging_utils"]
 
 # In-container health checks (layered doctor protocol via podman exec)
 [[modules]]
@@ -482,6 +483,8 @@ expose = [
     "effective_status",
     "mode_info",
     "has_gpu",
+    "CONTAINER_MODES",
+    "container_name",
 ]
 from = ["terok.lib.core.task_display"]
 
@@ -539,6 +542,7 @@ expose = [
     "TaskMeta",
     "tasks_meta_dir",
     "tasks_archive_dir",
+    "resolve_task_id",
 ]
 from = ["terok.lib.orchestration.tasks"]
 

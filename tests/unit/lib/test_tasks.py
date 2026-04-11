@@ -29,7 +29,13 @@ from terok.tui.clipboard import (
     copy_to_clipboard_detailed,
     get_clipboard_helper_status,
 )
-from tests.test_utils import mock_git_config, parse_meta_value, project_env, write_project
+from tests.test_utils import (
+    assert_hex_id,
+    mock_git_config,
+    parse_meta_value,
+    project_env,
+    write_project,
+)
 from tests.testfs import CONTAINER_SSH_DIR
 from tests.testnet import CONTAINER_HOSTNAME, GATE_PORT
 
@@ -73,22 +79,23 @@ class TestTask:
             project_id=project_id,
         ) as ctx:
             returned_id = task_new(project_id)
-            assert returned_id == "1"
+            assert_hex_id(returned_id)
             meta_dir = ctx.state_dir / "projects" / project_id / "tasks"
-            meta_path = meta_dir / "1.yml"
+            meta_path = meta_dir / f"{returned_id}.yml"
             assert meta_path.is_file()
 
             meta_text = meta_path.read_text(encoding="utf-8")
-            assert parse_meta_value(meta_text, "task_id") == "1"
+            assert parse_meta_value(meta_text, "task_id") == returned_id
             workspace_value = parse_meta_value(meta_text, "workspace")
             assert workspace_value is not None
             assert workspace_value != ""
             workspace = Path(workspace_value)  # type: ignore[arg-type]
             assert workspace.is_dir()
 
-            # Verify second task returns incremented ID
+            # Verify second task returns a different hex ID
             second_id = task_new(project_id)
-            assert second_id == "2"
+            assert_hex_id(second_id)
+            assert second_id != returned_id
 
             with (
                 unittest.mock.patch("terok.lib.orchestration.tasks.subprocess.run") as run_mock,
@@ -98,7 +105,7 @@ class TestTask:
                 mock_git_config(),
             ):
                 run_mock.return_value.returncode = 0
-                result = task_delete(project_id, "1")
+                result = task_delete(project_id, returned_id)
 
             assert isinstance(result, TaskDeleteResult)
             assert not meta_path.exists()
@@ -116,11 +123,11 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
+            task_id = task_new(project_id)
 
             # Verify marker file exists in the workspace subdirectory
             sandbox_live = ctx.base / "sandbox-live"
-            workspace_dir = sandbox_live / "tasks" / project_id / "1" / "workspace-dangerous"
+            workspace_dir = sandbox_live / "tasks" / project_id / task_id / "workspace-dangerous"
             marker_path = workspace_dir / ".new-task-marker"
             assert marker_path.is_file()
 
@@ -155,7 +162,7 @@ class TestTask:
     @staticmethod
     def _task_row_pattern(task_id: str) -> re.Pattern[str]:
         """Return the regex pattern matching a task row for ``task_id``."""
-        return re.compile(rf"(?m)^-{' ' * max(1, 4 - len(task_id))}{re.escape(task_id)}:")
+        return re.compile(rf"(?m)^- {re.escape(task_id)}:")
 
     def test_task_list_no_filters(self) -> None:
         """task_list with no filters prints all tasks."""
@@ -164,17 +171,16 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
-            task_new(project_id)
+            tid1 = task_new(project_id)
+            tid2 = task_new(project_id)
 
-            self._patch_task_meta(ctx, project_id, "1", mode="cli")
-            self._patch_task_meta(ctx, project_id, "2", mode="web")
+            self._patch_task_meta(ctx, project_id, tid1, mode="cli")
+            self._patch_task_meta(ctx, project_id, tid2, mode="web")
 
-            output = self._task_list_output(project_id, {"1": "running", "2": "exited"})
-            # Task IDs are right-aligned to 3 characters
-            assert re.search(r"(?m)^- {3}1:", output)
+            output = self._task_list_output(project_id, {tid1: "running", tid2: "exited"})
+            assert self._task_row_pattern(tid1).search(output)
             assert "running" in output
-            assert re.search(r"(?m)^- {3}2:", output)
+            assert self._task_row_pattern(tid2).search(output)
             assert "stopped" in output
 
     def test_task_list_filter_by_status(self) -> None:
@@ -184,62 +190,41 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
-            task_new(project_id)
+            tid1 = task_new(project_id)
+            tid2 = task_new(project_id)
 
-            self._patch_task_meta(ctx, project_id, "1", mode="cli")
-            self._patch_task_meta(ctx, project_id, "2", mode="cli")
+            self._patch_task_meta(ctx, project_id, tid1, mode="cli")
+            self._patch_task_meta(ctx, project_id, tid2, mode="cli")
 
             output = self._task_list_output(
-                project_id, {"1": "running", "2": "exited"}, status="running"
+                project_id, {tid1: "running", tid2: "exited"}, status="running"
             )
-            # Task IDs are right-aligned to 3 characters
-            assert re.search(r"(?m)^- {3}1:", output)
+            assert self._task_row_pattern(tid1).search(output)
             assert "running" in output
-            assert not re.search(r"(?m)^- {3}2:", output)
+            assert not self._task_row_pattern(tid2).search(output)
 
-    def test_task_list_id_alignment(self) -> None:
-        """task_list right-aligns task IDs to 3 characters."""
+    def test_task_list_id_format(self) -> None:
+        """task_list prints hex task IDs with no alignment padding."""
         project_id = "proj_align"
         with project_env(
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            # Create tasks 1 and 2 normally
-            task_new(project_id)
-            task_new(project_id)
-            self._patch_task_meta(ctx, project_id, "1", mode="cli")
-            self._patch_task_meta(ctx, project_id, "2", mode="cli")
-
-            # Manually create a 2-digit task (10) and a 3-digit task (100)
-            meta_dir = ctx.state_dir / "projects" / project_id / "tasks"
-            ws_base = ctx.state_dir / "projects" / project_id / "workspaces"
-            for tid, name in [("10", "double-digit"), ("100", "triple-digit")]:
-                ws_dir = ws_base / tid
-                ws_dir.mkdir(parents=True, exist_ok=True)
-                meta = {
-                    "task_id": tid,
-                    "name": name,
-                    "mode": "cli",
-                    "workspace": str(ws_dir),
-                    "web_port": None,
-                }
-                (meta_dir / f"{tid}.yml").write_text(yaml_dump(meta))
+            tid1 = task_new(project_id)
+            tid2 = task_new(project_id)
+            self._patch_task_meta(ctx, project_id, tid1, mode="cli")
+            self._patch_task_meta(ctx, project_id, tid2, mode="cli")
 
             output = self._task_list_output(
                 project_id,
                 {
-                    "1": "running",
-                    "2": "exited",
-                    "10": "running",
-                    "100": "running",
+                    tid1: "running",
+                    tid2: "exited",
                 },
             )
-            # 1-digit: 2 leading spaces; 2-digit: 1 leading space; 3-digit: none
-            assert re.search(r"(?m)^- {3}1:", output)
-            assert re.search(r"(?m)^- {3}2:", output)
-            assert re.search(r"(?m)^- {2}10:", output)
-            assert re.search(r"(?m)^- 100:", output)
+            # Hex IDs are printed without alignment padding
+            assert self._task_row_pattern(tid1).search(output)
+            assert self._task_row_pattern(tid2).search(output)
 
     def test_task_list_filter_by_mode(self) -> None:
         """task_list --mode filters tasks by their mode field."""
@@ -248,15 +233,15 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
-            task_new(project_id)
+            tid1 = task_new(project_id)
+            tid2 = task_new(project_id)
 
-            self._patch_task_meta(ctx, project_id, "1", mode="cli")
-            self._patch_task_meta(ctx, project_id, "2", mode="web")
+            self._patch_task_meta(ctx, project_id, tid1, mode="cli")
+            self._patch_task_meta(ctx, project_id, tid2, mode="web")
 
-            output = self._task_list_output(project_id, {"2": None}, mode="web")
-            assert not self._task_row_pattern("1").search(output)
-            assert self._task_row_pattern("2").search(output)
+            output = self._task_list_output(project_id, {tid2: None}, mode="web")
+            assert not self._task_row_pattern(tid1).search(output)
+            assert self._task_row_pattern(tid2).search(output)
 
     def test_task_list_filter_by_agent(self) -> None:
         """task_list --agent filters tasks by their preset field."""
@@ -265,15 +250,15 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
-            task_new(project_id)
+            tid1 = task_new(project_id)
+            tid2 = task_new(project_id)
 
-            self._patch_task_meta(ctx, project_id, "1", preset="claude")
-            self._patch_task_meta(ctx, project_id, "2", preset="codex")
+            self._patch_task_meta(ctx, project_id, tid1, preset="claude")
+            self._patch_task_meta(ctx, project_id, tid2, preset="codex")
 
-            output = self._task_list_output(project_id, {"1": None, "2": None}, agent="claude")
-            assert self._task_row_pattern("1").search(output)
-            assert not self._task_row_pattern("2").search(output)
+            output = self._task_list_output(project_id, {tid1: None, tid2: None}, agent="claude")
+            assert self._task_row_pattern(tid1).search(output)
+            assert not self._task_row_pattern(tid2).search(output)
 
     def test_task_list_combined_filters(self) -> None:
         """task_list with multiple filters applies all of them (AND logic)."""
@@ -282,24 +267,24 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
-            task_new(project_id)
-            task_new(project_id)
+            tid1 = task_new(project_id)
+            tid2 = task_new(project_id)
+            tid3 = task_new(project_id)
 
             for tid, mode in [
-                ("1", "cli"),
-                ("2", "web"),
-                ("3", "cli"),
+                (tid1, "cli"),
+                (tid2, "web"),
+                (tid3, "cli"),
             ]:
                 self._patch_task_meta(ctx, project_id, tid, mode=mode)
 
             # mode filter narrows to cli first, then status=running keeps only task 1
             output = self._task_list_output(
-                project_id, {"1": "running", "3": "exited"}, status="running", mode="cli"
+                project_id, {tid1: "running", tid3: "exited"}, status="running", mode="cli"
             )
-            assert self._task_row_pattern("1").search(output)
-            assert not self._task_row_pattern("2").search(output)
-            assert not self._task_row_pattern("3").search(output)
+            assert self._task_row_pattern(tid1).search(output)
+            assert not self._task_row_pattern(tid2).search(output)
+            assert not self._task_row_pattern(tid3).search(output)
 
     def test_task_list_no_match(self) -> None:
         """task_list prints 'No tasks found' when filters match nothing."""
@@ -308,10 +293,10 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
 
             # New task has no mode → effective status is "created", not "running"
-            output = self._task_list_output(project_id, {"1": None}, status="running")
+            output = self._task_list_output(project_id, {tid: None}, status="running")
             assert "No tasks found" in output
 
     @unittest.mock.patch("terok.lib.orchestration.environment.ensure_server_reachable")
@@ -423,7 +408,7 @@ class TestTask:
             with_config_file=True,
             clear_env=True,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             with (
                 mock_git_config(),
                 unittest.mock.patch(
@@ -445,12 +430,13 @@ class TestTask:
                 run_mock.return_value = subprocess.CompletedProcess([], 0)
                 buffer = StringIO()
                 with redirect_stdout(buffer):
-                    task_run_cli(project_id, "1")
+                    task_run_cli(project_id, tid)
 
             output = buffer.getvalue()
-            expected_name = f"\x1b[32m{project_id}-cli-1\x1b[0m"
-            expected_enter = f"\x1b[34mpodman exec -it {project_id}-cli-1 bash\x1b[0m"
-            expected_stop = f"\x1b[31mpodman stop {project_id}-cli-1\x1b[0m"
+            cname = f"{project_id}-cli-{tid}"
+            expected_name = f"\x1b[32m{cname}\x1b[0m"
+            expected_enter = f"\x1b[34mpodman exec -it {cname} bash\x1b[0m"
+            expected_stop = f"\x1b[31mpodman stop {cname}\x1b[0m"
             assert expected_name in output
             assert expected_enter in output
             assert expected_stop in output
@@ -464,9 +450,9 @@ class TestTask:
             with_config_file=True,
             clear_env=True,
         ) as ctx:
-            task_new(project_id)
+            tid = task_new(project_id)
             sandbox_live = ctx.base / "sandbox-live"
-            workspace_dir = sandbox_live / "tasks" / project_id / "1" / "workspace-dangerous"
+            workspace_dir = sandbox_live / "tasks" / project_id / tid / "workspace-dangerous"
             assert sorted(p.name for p in workspace_dir.iterdir()) == [".new-task-marker"]
             with (
                 mock_git_config(),
@@ -483,7 +469,7 @@ class TestTask:
                 ) as run_mock,
             ):
                 run_mock.return_value = subprocess.CompletedProcess([], 0)
-                task_run_cli(project_id, "1")
+                task_run_cli(project_id, tid)
 
             assert sorted(p.name for p in workspace_dir.iterdir()) == [".new-task-marker"]
             agent_mounts = ctx.base / "sandbox-live" / "mounts"
@@ -498,7 +484,7 @@ class TestTask:
             with_config_file=True,
             clear_env=True,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             with (
                 mock_git_config(),
                 unittest.mock.patch(
@@ -521,7 +507,7 @@ class TestTask:
                     "terok.lib.orchestration.task_runners._sandbox"
                 ) as sandbox_factory,
             ):
-                task_run_toad(project_id, "1")
+                task_run_toad(project_id, tid)
 
             spec = sandbox_factory.return_value.run.call_args[0][0]
             bash_cmd = spec.command[-1]
@@ -545,7 +531,7 @@ class TestTask:
         ):
             # Re-apply after clear_env
             monkeypatch.setenv("TEROK_PUBLIC_HOST", "myserver")
-            task_new(project_id)
+            tid = task_new(project_id)
             with (
                 mock_git_config(),
                 unittest.mock.patch(
@@ -568,7 +554,7 @@ class TestTask:
                     "terok.lib.orchestration.task_runners._sandbox"
                 ) as sandbox_factory,
             ):
-                task_run_toad(project_id, "1")
+                task_run_toad(project_id, tid)
 
             spec = sandbox_factory.return_value.run.call_args[0][0]
             bash_cmd = spec.command[-1]
@@ -586,7 +572,7 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             with (
                 mock_git_config(),
                 unittest.mock.patch(
@@ -599,7 +585,7 @@ class TestTask:
             ):
                 buffer = StringIO()
                 with redirect_stdout(buffer):
-                    task_run_cli(project_id, "1")
+                    task_run_cli(project_id, tid)
 
                 # Verify no podman run was called
                 run_mock.assert_not_called()
@@ -615,9 +601,9 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ) as ctx:
-            task_new(project_id)
+            tid = task_new(project_id)
             meta_dir = ctx.state_dir / "projects" / project_id / "tasks"
-            meta_path = meta_dir / "1.yml"
+            meta_path = meta_dir / f"{tid}.yml"
 
             # Simulate task was previously run
             meta = yaml_load(meta_path.read_text())
@@ -637,7 +623,7 @@ class TestTask:
                 run_mock.return_value = subprocess.CompletedProcess(args=[], returncode=0)
                 buffer = StringIO()
                 with redirect_stdout(buffer):
-                    task_run_cli(project_id, "1")
+                    task_run_cli(project_id, tid)
 
                 # Verify podman start was called
                 run_mock.assert_called_once()
@@ -665,9 +651,9 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             # Task exists but has never been run (mode=None)
-            result = get_workspace_git_diff(project_id, "1")
+            result = get_workspace_git_diff(project_id, tid)
             assert result is None
 
     def test_get_workspace_git_diff_delegates_to_container(self) -> None:
@@ -677,10 +663,10 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             from terok.lib.orchestration.tasks import tasks_meta_dir
 
-            meta_path = tasks_meta_dir(project_id) / "1.yml"
+            meta_path = tasks_meta_dir(project_id) / f"{tid}.yml"
             meta = yaml_load(meta_path.read_text())
             meta["mode"] = "cli"
             meta_path.write_text(yaml_dump(meta))
@@ -690,9 +676,9 @@ class TestTask:
                 "terok.lib.orchestration.tasks.container_git_diff",
                 return_value=expected,
             ) as mock_diff:
-                result = get_workspace_git_diff(project_id, "1", "HEAD")
+                result = get_workspace_git_diff(project_id, tid, "HEAD")
                 assert result == expected
-                mock_diff.assert_called_once_with(project_id, "1", "cli", "HEAD")
+                mock_diff.assert_called_once_with(project_id, tid, "cli", "HEAD")
 
     def test_get_workspace_git_diff_prev_commit(self) -> None:
         """Test get_workspace_git_diff with PREV option passes HEAD~1..HEAD."""
@@ -701,10 +687,10 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             from terok.lib.orchestration.tasks import tasks_meta_dir
 
-            meta_path = tasks_meta_dir(project_id) / "1.yml"
+            meta_path = tasks_meta_dir(project_id) / f"{tid}.yml"
             meta = yaml_load(meta_path.read_text())
             meta["mode"] = "run"
             meta_path.write_text(yaml_dump(meta))
@@ -714,9 +700,9 @@ class TestTask:
                 "terok.lib.orchestration.tasks.container_git_diff",
                 return_value=expected,
             ) as mock_diff:
-                result = get_workspace_git_diff(project_id, "1", "PREV")
+                result = get_workspace_git_diff(project_id, tid, "PREV")
                 assert result == expected
-                mock_diff.assert_called_once_with(project_id, "1", "run", "HEAD~1", "HEAD")
+                mock_diff.assert_called_once_with(project_id, tid, "run", "HEAD~1", "HEAD")
 
     def test_get_workspace_git_diff_container_failure(self) -> None:
         """Test get_workspace_git_diff returns None when container exec fails."""
@@ -725,10 +711,10 @@ class TestTask:
             f"project:\n  id: {project_id}\n",
             project_id=project_id,
         ):
-            task_new(project_id)
+            tid = task_new(project_id)
             from terok.lib.orchestration.tasks import tasks_meta_dir
 
-            meta_path = tasks_meta_dir(project_id) / "1.yml"
+            meta_path = tasks_meta_dir(project_id) / f"{tid}.yml"
             meta = yaml_load(meta_path.read_text())
             meta["mode"] = "cli"
             meta_path.write_text(yaml_dump(meta))
@@ -737,7 +723,7 @@ class TestTask:
                 "terok.lib.orchestration.tasks.container_git_diff",
                 return_value=None,
             ):
-                result = get_workspace_git_diff(project_id, "1")
+                result = get_workspace_git_diff(project_id, tid)
                 assert result is None
 
     def test_copy_to_clipboard_empty_text(self) -> None:

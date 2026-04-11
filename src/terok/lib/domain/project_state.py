@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..core.config import build_dir, make_sandbox_config
 from ..core.images import project_cli_image
 from ..core.projects import load_project
+from ..core.task_display import container_name as _container_name
 
 if TYPE_CHECKING:
     from ..core.project_model import ProjectConfig
@@ -249,7 +250,7 @@ def is_task_image_old(project_id: str | None, task: Any) -> bool | None:
     if task.mode != "cli":
         return None
 
-    container_name = f"{project_id}-{task.mode}-{task.task_id}"
+    cname = _container_name(project_id, task.mode, task.task_id)
     try:
         result = subprocess.run(
             [
@@ -258,7 +259,7 @@ def is_task_image_old(project_id: str | None, task: Any) -> bool | None:
                 "inspect",
                 "--format",
                 "{{.State.Running}}\t{{.Image}}",
-                container_name,
+                cname,
             ],
             capture_output=True,
             text=True,

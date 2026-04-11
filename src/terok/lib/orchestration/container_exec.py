@@ -12,12 +12,8 @@ import subprocess
 
 from terok_sandbox import get_container_state
 
+from ..core.task_display import container_name as _container_name
 from ..util.logging_utils import _log_debug
-
-
-def _container_name(project_id: str, mode: str, task_id: str) -> str:
-    """Inline container naming to avoid circular import with tasks."""
-    return f"{project_id}-{mode}-{task_id}"
 
 
 def _podman_start(cname: str) -> bool:

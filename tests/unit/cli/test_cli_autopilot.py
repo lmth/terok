@@ -172,7 +172,10 @@ def test_task_run_commands_forward_selected_agents(
     expected_kwargs: dict[str, object],
 ) -> None:
     """Selected agents and permission mode are forwarded to task runners."""
-    with patch(target) as mock_run:
+    with (
+        patch("terok.cli.commands.task.resolve_task_id", side_effect=lambda _pid, tid: tid),
+        patch(target) as mock_run,
+    ):
         run_cli(*argv)
 
     mock_run.assert_called_once_with(*expected_args, **expected_kwargs)

@@ -225,6 +225,11 @@ class TestTaskStart:
         patch_target: str,
         expected_call: tuple[str, ...],
     ) -> None:
-        with unittest.mock.patch(patch_target) as mock_fn:
+        with (
+            unittest.mock.patch(
+                "terok.cli.commands.task.resolve_task_id", side_effect=lambda _pid, tid: tid
+            ),
+            unittest.mock.patch(patch_target) as mock_fn,
+        ):
             run_main(argv)
         mock_fn.assert_called_once_with(*expected_call)

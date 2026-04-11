@@ -25,27 +25,33 @@ def setup_task_with_mode(
     project_id: str,
     *,
     mode: str | None = None,
-) -> None:
-    """Create a task and optionally set its execution mode in metadata."""
-    task_new(project_id)
+) -> str:
+    """Create a task and optionally set its execution mode in metadata.
+
+    Returns the task ID.
+    """
+    task_id = task_new(project_id)
     if mode:
-        meta_path = ctx.state_dir / "projects" / project_id / "tasks" / "1.yml"
+        meta_path = ctx.state_dir / "projects" / project_id / "tasks" / f"{task_id}.yml"
         meta = yaml_load(meta_path.read_text())
         meta["mode"] = mode
         meta_path.write_text(yaml_dump(meta), encoding="utf-8")
+    return task_id
 
 
-LOGIN_COMMAND = [
-    "podman",
-    "exec",
-    "-it",
-    "proj-cli-cli-1",
-    "tmux",
-    "new-session",
-    "-A",
-    "-s",
-    "main",
-]
+def _login_command(container: str) -> list[str]:
+    """Return the expected podman exec command for a given container name."""
+    return [
+        "podman",
+        "exec",
+        "-it",
+        container,
+        "tmux",
+        "new-session",
+        "-A",
+        "-s",
+        "main",
+    ]
 
 
 class TestLogin:
@@ -69,21 +75,24 @@ class TestLogin:
         error_text: str,
     ) -> None:
         with project_env(project_yaml(project_id), project_id=project_id) as ctx:
+            task_id = "deadbeef"  # nonexistent by default
             if project_id != "proj_login_unknown":
-                setup_task_with_mode(ctx, project_id, mode=mode)
+                task_id = setup_task_with_mode(ctx, project_id, mode=mode)
             with unittest.mock.patch(
                 "terok.lib.orchestration.tasks.get_container_state",
                 return_value=container_state,
             ):
                 with pytest.raises(SystemExit) as exc_ctx:
-                    task_login(project_id, "999" if project_id == "proj_login_unknown" else "1")
+                    task_login(
+                        project_id, "deadbeef" if project_id == "proj_login_unknown" else task_id
+                    )
             assert error_text in str(exc_ctx.value)
 
     def test_task_login_success(self) -> None:
         """task_login calls os.execvp with the correct podman+tmux command."""
         project_id = "proj-cli"
         with project_env(project_yaml(project_id), project_id=project_id) as ctx:
-            setup_task_with_mode(ctx, project_id, mode="cli")
+            task_id = setup_task_with_mode(ctx, project_id, mode="cli")
             with (
                 unittest.mock.patch(
                     "terok.lib.orchestration.tasks.get_container_state",
@@ -91,27 +100,28 @@ class TestLogin:
                 ),
                 unittest.mock.patch("terok.lib.orchestration.tasks.os.execvp") as mock_exec,
             ):
-                task_login(project_id, "1")
-        mock_exec.assert_called_once_with("podman", LOGIN_COMMAND)
+                task_login(project_id, task_id)
+        expected_container = f"{project_id}-cli-{task_id}"
+        mock_exec.assert_called_once_with("podman", _login_command(expected_container))
 
     @pytest.mark.parametrize(
-        ("mode", "expected_container"),
-        [("cli", "proj_logincmd-cli-1"), ("web", "proj_loginweb-web-1")],
+        "mode",
+        ["cli", "web"],
         ids=["cli", "web"],
     )
     def test_get_login_command_returns_expected_container_name(
         self,
         mode: str,
-        expected_container: str,
     ) -> None:
         project_id = "proj_logincmd" if mode == "cli" else "proj_loginweb"
         with project_env(project_yaml(project_id), project_id=project_id) as ctx:
-            setup_task_with_mode(ctx, project_id, mode=mode)
+            task_id = setup_task_with_mode(ctx, project_id, mode=mode)
             with unittest.mock.patch(
                 "terok.lib.orchestration.tasks.get_container_state",
                 return_value="running",
             ):
-                command = get_login_command(project_id, "1")
+                command = get_login_command(project_id, task_id)
+        expected_container = f"{project_id}-{mode}-{task_id}"
         assert command[3] == expected_container
         assert command[-5:] == ["tmux", "new-session", "-A", "-s", "main"]
 
@@ -120,7 +130,7 @@ class TestLogin:
         project_id = "proj_login_cfg"
         yaml_text = f"project:\n  id: {project_id}\nagent:\n  model: sonnet\n"
         with project_env(yaml_text, project_id=project_id) as ctx:
-            setup_task_with_mode(ctx, project_id, mode="cli")
+            task_id = setup_task_with_mode(ctx, project_id, mode="cli")
             with (
                 unittest.mock.patch(
                     "terok.lib.orchestration.tasks.get_container_state",
@@ -129,8 +139,8 @@ class TestLogin:
                 mock_git_config(),
                 unittest.mock.patch("terok.lib.orchestration.tasks.subprocess.run") as mock_run,
             ):
-                command = get_login_command(project_id, "1")
+                command = get_login_command(project_id, task_id)
 
-        assert command[3] == f"{project_id}-cli-1"
+        assert command[3] == f"{project_id}-cli-{task_id}"
         assert "tmux" in command
         mock_run.assert_not_called()

@@ -152,3 +152,14 @@ def mode_info(mode: str | None) -> ModeInfo:
     """Return the display info for a task mode string."""
     info = MODE_DISPLAY.get(mode if isinstance(mode, str) else None)
     return info if info else MODE_DISPLAY[None]
+
+
+# ---------- Container naming ----------
+
+CONTAINER_MODES = ("cli", "web", "run", "toad")
+"""All valid container mode suffixes used in container naming."""
+
+
+def container_name(project_id: str, mode: str, task_id: str) -> str:
+    """Return the canonical container name for a task."""
+    return f"{project_id}-{mode}-{task_id}"

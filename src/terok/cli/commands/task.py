@@ -31,6 +31,7 @@ from ...lib.domain.facade import (
     task_status,
     task_stop,
 )
+from ...lib.orchestration.tasks import resolve_task_id
 from ._completers import complete_project_ids as _complete_project_ids, set_completer
 
 
@@ -272,7 +273,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 def dispatch(args: argparse.Namespace) -> bool:
     """Handle task-related commands.  Returns True if handled."""
     if args.cmd == "login":
-        task_login(args.project_id, args.task_id)
+        tid = resolve_task_id(args.project_id, args.task_id)
+        task_login(args.project_id, tid)
         return True
     if args.cmd == "run":
         # Read instructions file if provided via --instructions
@@ -320,72 +322,65 @@ def dispatch(args: argparse.Namespace) -> bool:
 
 def _dispatch_task_sub(args: argparse.Namespace) -> bool:
     """Dispatch ``task <subcommand>`` to the right handler."""
+    pid = args.project_id
+    tid = resolve_task_id(pid, args.task_id) if hasattr(args, "task_id") else ""
     if args.task_cmd == "new":
-        task_new(args.project_id, name=getattr(args, "name", None))
+        task_new(pid, name=getattr(args, "name", None))
     elif args.task_cmd == "list":
         task_list(
-            args.project_id,
+            pid,
             status=getattr(args, "filter_status", None),
             mode=getattr(args, "filter_mode", None),
             agent=getattr(args, "filter_agent", None),
         )
     elif args.task_cmd == "run-cli":
         task_run_cli(
-            args.project_id,
-            args.task_id,
+            pid,
+            tid,
             agents=getattr(args, "selected_agents", None),
             preset=getattr(args, "preset", None),
             unrestricted=_resolve_unrestricted(args),
         )
     elif args.task_cmd == "run-toad":
         task_run_toad(
-            args.project_id,
-            args.task_id,
+            pid,
+            tid,
             agents=getattr(args, "selected_agents", None),
             preset=getattr(args, "preset", None),
             unrestricted=_resolve_unrestricted(args),
         )
     elif args.task_cmd == "delete":
-        result = task_delete(args.project_id, args.task_id)
+        result = task_delete(pid, tid)
         if result.warnings:
             for w in result.warnings:
                 print(f"  Warning: {w}", file=sys.stderr)
-            print(
-                f"Deleted task {args.task_id} (with warnings)."
-                f" Archive: terok task archive list {args.project_id}"
-            )
+            print(f"Deleted task {tid} (with warnings). Archive: terok task archive list {pid}")
         else:
-            print(
-                f"Deleted task {args.task_id}. Archive: terok task archive list {args.project_id}"
-            )
+            print(f"Deleted task {tid}. Archive: terok task archive list {pid}")
     elif args.task_cmd == "stop":
-        task_stop(args.project_id, args.task_id, timeout=getattr(args, "timeout", None))
+        task_stop(pid, tid, timeout=getattr(args, "timeout", None))
     elif args.task_cmd == "restart":
-        task_restart(args.project_id, args.task_id)
+        task_restart(pid, tid)
     elif args.task_cmd == "followup":
         task_followup_headless(
-            args.project_id,
-            args.task_id,
+            pid,
+            tid,
             args.prompt,
             follow=not getattr(args, "no_follow", False),
         )
     elif args.task_cmd == "start":
-        task_id = task_new(args.project_id, name=getattr(args, "name", None))
+        task_id = task_new(pid, name=getattr(args, "name", None))
         selected = getattr(args, "selected_agents", None)
         preset = getattr(args, "preset", None)
         restriction = _resolve_unrestricted(args)
         if getattr(args, "toad", False):
-            task_run_toad(
-                args.project_id, task_id, agents=selected, preset=preset, unrestricted=restriction
-            )
+            task_run_toad(pid, task_id, agents=selected, preset=preset, unrestricted=restriction)
         else:
-            task_run_cli(
-                args.project_id, task_id, agents=selected, preset=preset, unrestricted=restriction
-            )
+            task_run_cli(pid, task_id, agents=selected, preset=preset, unrestricted=restriction)
     elif args.task_cmd == "rename":
-        task_rename(args.project_id, args.task_id, args.name)
+        task_rename(pid, tid, args.name)
     elif args.task_cmd == "status":
-        task_status(args.project_id, args.task_id)
+        task_status(pid, tid)
     elif args.task_cmd == "logs":
         # Resolve streaming: CLI flag → config → default (True)
         if getattr(args, "no_stream", None):
@@ -395,8 +390,8 @@ def _dispatch_task_sub(args: argparse.Namespace) -> bool:
         else:
             stream = _get_logs_partial_streaming()
         task_logs(
-            args.project_id,
-            args.task_id,
+            pid,
+            tid,
             LogViewOptions(
                 follow=getattr(args, "follow", False),
                 raw=getattr(args, "raw", False),
