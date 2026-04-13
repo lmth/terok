@@ -36,6 +36,45 @@ def write_keypair(ssh_dir: Path, key_name: str) -> None:
     (ssh_dir / f"{key_name}.pub").write_text("dummy", encoding="utf-8")
 
 
+class TestRegisterSshKey:
+    """Tests for register_ssh_key() in the domain facade."""
+
+    def test_register_calls_update_ssh_keys_json(self) -> None:
+        """register_ssh_key must delegate to update_ssh_keys_json with the right args."""
+        fake_result = {
+            "private_key": "/tmp/terok-testing/ssh/id_ed25519_proj",
+            "dir": "/tmp/terok-testing/ssh",
+        }
+        with (
+            unittest.mock.patch("terok_sandbox.update_ssh_keys_json") as m_update,
+            unittest.mock.patch("terok.lib.core.config.make_sandbox_config") as m_cfg,
+        ):
+            m_cfg.return_value.ssh_keys_json_path = Path("/tmp/terok-testing/ssh-keys.json")
+            from terok.lib.domain.facade import register_ssh_key
+
+            register_ssh_key("myproj", fake_result)
+
+        m_update.assert_called_once_with(
+            Path("/tmp/terok-testing/ssh-keys.json"), "myproj", fake_result
+        )
+
+    def test_register_propagates_errors(self) -> None:
+        """Errors from update_ssh_keys_json must propagate (no silent swallowing)."""
+        with (
+            unittest.mock.patch(
+                "terok_sandbox.update_ssh_keys_json", side_effect=OSError("disk full")
+            ),
+            unittest.mock.patch("terok.lib.core.config.make_sandbox_config") as m_cfg,
+        ):
+            m_cfg.return_value.ssh_keys_json_path = Path("/tmp/terok-testing/ssh-keys.json")
+            import pytest
+
+            from terok.lib.domain.facade import register_ssh_key
+
+            with pytest.raises(OSError, match="disk full"):
+                register_ssh_key("proj", {"private_key": "/tmp/terok-testing/k"})
+
+
 class TestSsh:
     """Tests for SSHManager init behavior."""
 
