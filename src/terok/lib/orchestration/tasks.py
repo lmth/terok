@@ -21,8 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from terok_sandbox import (
+    container_stop,
     get_container_state,
     get_container_states,
+    login_command,
     stop_task_containers,
 )
 
@@ -869,19 +871,9 @@ def _validate_login(project: ProjectConfig, task_id: str) -> tuple[str, str]:
 
 
 def _get_login_command(project: ProjectConfig, task_id: str) -> list[str]:
-    """Return the podman exec command to log into a task container."""
+    """Return the command to interactively log into a task container."""
     cname, _mode = _validate_login(project, task_id)
-    return [
-        "podman",
-        "exec",
-        "-it",
-        cname,
-        "tmux",
-        "new-session",
-        "-A",
-        "-s",
-        "main",
-    ]
+    return login_command(cname)
 
 
 def _task_login(project: ProjectConfig, task_id: str) -> None:
@@ -917,16 +909,12 @@ def _task_stop(project: ProjectConfig, task_id: str, *, timeout: int | None = No
         raise SystemExit(f"Task {task_id} container is not stoppable (state: {state})")
 
     try:
-        subprocess.run(
-            ["podman", "stop", "--time", str(effective_timeout), cname],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        result = container_stop(cname, timeout=effective_timeout)
     except FileNotFoundError:
         raise SystemExit("podman not found; please install podman")
-    except subprocess.CalledProcessError as e:
-        raise SystemExit(f"Failed to stop container: {e}")
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise SystemExit(f"Failed to stop container: {stderr or f'exit code {result.returncode}'}")
 
     try:
         from .ports import release_web_port

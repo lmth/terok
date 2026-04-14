@@ -111,12 +111,14 @@ def test_task_stop_uses_expected_timeout(
     ) as ctx:
         task_id = create_task_with_mode(ctx, project_id)
 
+        stop_result = subprocess.CompletedProcess(args=[], returncode=0, stderr="")
         with (
             mock_git_config(),
             patch("terok.lib.orchestration.tasks.get_container_state", return_value="running"),
-            patch("terok.lib.orchestration.tasks.subprocess.run") as run_mock,
+            patch(
+                "terok.lib.orchestration.tasks.container_stop", return_value=stop_result
+            ) as mock_stop,
         ):
-            run_mock.return_value = completed_process()
             capture_stdout(
                 task_stop,
                 project_id,
@@ -124,13 +126,9 @@ def test_task_stop_uses_expected_timeout(
                 **({"timeout": timeout_override} if timeout_override is not None else {}),
             )
 
-        assert run_podman_args(run_mock) == [
-            "podman",
-            "stop",
-            "--time",
-            expected_timeout,
-            f"{project_id}-cli-{task_id}",
-        ]
+        mock_stop.assert_called_once_with(
+            f"{project_id}-cli-{task_id}", timeout=int(expected_timeout)
+        )
 
 
 def test_task_stop_unknown_task_raises_system_exit() -> None:
@@ -142,24 +140,28 @@ def test_task_stop_unknown_task_raises_system_exit() -> None:
 
 
 def test_task_restart_starts_exited_container() -> None:
-    """Restarting an exited task uses ``podman start``."""
+    """Restarting an exited task uses container_start."""
     project_id = "proj_restart"
     with project_env(project_config(project_id), project_id=project_id) as ctx:
         task_id = create_task_with_mode(ctx, project_id)
         container_name = f"{project_id}-cli-{task_id}"
 
+        start_result = completed_process()
+        start_result.stderr = ""
         with (
             mock_git_config(),
             patch(
                 "terok.lib.orchestration.task_runners.get_container_state",
                 side_effect=["exited", "running"],
             ),
-            patch("terok.lib.orchestration.task_runners.subprocess.run") as run_mock,
+            patch(
+                "terok.lib.orchestration.task_runners.container_start",
+                return_value=start_result,
+            ) as mock_start,
         ):
-            run_mock.return_value = completed_process()
             capture_stdout(task_restart, project_id, task_id)
 
-        assert run_podman_args(run_mock) == ["podman", "start", container_name]
+        mock_start.assert_called_once_with(container_name)
 
 
 def test_task_restart_running_container_stops_then_starts() -> None:
@@ -169,25 +171,27 @@ def test_task_restart_running_container_stops_then_starts() -> None:
         task_id = create_task_with_mode(ctx, project_id)
         container_name = f"{project_id}-cli-{task_id}"
 
+        stop_result = subprocess.CompletedProcess(args=[], returncode=0, stderr="")
+        start_result = subprocess.CompletedProcess(args=[], returncode=0, stderr="")
         with (
             mock_git_config(),
             patch(
                 "terok.lib.orchestration.task_runners.get_container_state",
                 side_effect=["running", "running"],
             ),
-            patch("terok.lib.orchestration.task_runners.subprocess.run") as run_mock,
+            patch(
+                "terok.lib.orchestration.task_runners.container_stop",
+                return_value=stop_result,
+            ) as mock_stop,
+            patch(
+                "terok.lib.orchestration.task_runners.container_start",
+                return_value=start_result,
+            ) as mock_start,
         ):
-            run_mock.return_value = completed_process()
             output = capture_stdout(task_restart, project_id, task_id)
 
-        assert run_podman_args(run_mock, call_index=0) == [
-            "podman",
-            "stop",
-            "--time",
-            "10",
-            container_name,
-        ]
-        assert run_podman_args(run_mock, call_index=1) == ["podman", "start", container_name]
+        mock_stop.assert_called_once_with(container_name, timeout=10)
+        mock_start.assert_called_once_with(container_name)
         assert "Restarted" in output
 
 

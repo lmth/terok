@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import shlex
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,9 +24,12 @@ from terok_sandbox import (
     Sandbox,
     Sharing,
     VolumeSpec,
+    container_start,
+    container_stop,
     down as _shield_down_impl,
     get_container_state,
     is_container_running,
+    login_command as _sandbox_login_command,
     stream_initial_logs,
     wait_for_exit,
 )
@@ -169,17 +172,16 @@ def _prepare_agent_config(
 def _podman_start(cname: str) -> None:
     """Start an existing container, raising SystemExit on failure."""
     try:
-        subprocess.run(
-            ["podman", "start", cname],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        result = container_start(cname)
     except FileNotFoundError:
         raise SystemExit("podman not found; please install podman")
-    except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or b"").decode(errors="replace")
-        msg = f"Failed to start container:\n{stderr.strip()}" if stderr else str(exc)
+    if result.returncode != 0:
+        stderr = result.stderr.strip() if result.stderr else ""
+        msg = (
+            f"Failed to start container:\n{stderr}"
+            if stderr
+            else f"podman start failed (rc={result.returncode})"
+        )
         raise SystemExit(msg)
 
 
@@ -196,7 +198,7 @@ def _assert_running(cname: str) -> None:
 def _print_login_instructions(project_id: str, task_id: str, cname: str, color: bool) -> None:
     """Print how to log into a CLI container."""
     login_cmd = f"terok login {project_id} {task_id}"
-    raw_cmd = f"podman exec -it {cname} bash"
+    raw_cmd = shlex.join(_sandbox_login_command(cname, command=("bash",)))
     print(f"Login with: {_blue(login_cmd, color)}")
     print(f"  (or:      {_blue(raw_cmd, color)})")
 
@@ -1052,16 +1054,14 @@ def task_restart(project_id: str, task_id: str) -> None:
     if container_state == "running":
         # Container is running - stop it first, then start it again
         try:
-            subprocess.run(
-                ["podman", "stop", "--time", str(project.shutdown_timeout), cname],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            result = container_stop(cname, timeout=project.shutdown_timeout)
         except FileNotFoundError:
             raise SystemExit("podman not found; please install podman")
-        except subprocess.CalledProcessError as e:
-            raise SystemExit(f"Failed to stop container: {e}")
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise SystemExit(
+                f"Failed to stop container: {stderr or f'exit code {result.returncode}'}"
+            )
         run_hook(
             "post_stop",
             project.hook_post_stop,

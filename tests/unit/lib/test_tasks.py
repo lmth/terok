@@ -420,14 +420,10 @@ class TestTask:
                     side_effect=[None, "running"],  # No existing container, then alive
                 ),
                 unittest.mock.patch(
-                    "terok.lib.orchestration.task_runners.subprocess.run"
-                ) as run_mock,
-                unittest.mock.patch(
                     "terok.lib.orchestration.task_runners._supports_color",
                     return_value=True,
                 ),
             ):
-                run_mock.return_value = subprocess.CompletedProcess([], 0)
                 buffer = StringIO()
                 with redirect_stdout(buffer):
                     task_run_cli(project_id, tid)
@@ -464,11 +460,7 @@ class TestTask:
                     "terok.lib.orchestration.task_runners.get_container_state",
                     side_effect=[None, "running"],
                 ),
-                unittest.mock.patch(
-                    "terok.lib.orchestration.task_runners.subprocess.run"
-                ) as run_mock,
             ):
-                run_mock.return_value = subprocess.CompletedProcess([], 0)
                 task_run_cli(project_id, tid)
 
             assert sorted(p.name for p in workspace_dir.iterdir()) == [".new-task-marker"]
@@ -579,16 +571,10 @@ class TestTask:
                     "terok.lib.orchestration.task_runners.get_container_state",
                     return_value="running",
                 ),
-                unittest.mock.patch(
-                    "terok.lib.orchestration.task_runners.subprocess.run"
-                ) as run_mock,
             ):
                 buffer = StringIO()
                 with redirect_stdout(buffer):
                     task_run_cli(project_id, tid)
-
-                # Verify no podman run was called
-                run_mock.assert_not_called()
 
                 # Verify message indicates already running
                 output = buffer.getvalue()
@@ -610,6 +596,8 @@ class TestTask:
             meta["mode"] = "cli"
             meta_path.write_text(yaml_dump(meta))
 
+            cname = f"{project_id}-cli-{tid}"
+            start_result = subprocess.CompletedProcess(args=[], returncode=0, stderr="")
             with (
                 mock_git_config(),
                 unittest.mock.patch(
@@ -617,18 +605,16 @@ class TestTask:
                     side_effect=["exited", "running"],  # Stopped, then alive after start
                 ),
                 unittest.mock.patch(
-                    "terok.lib.orchestration.task_runners.subprocess.run"
-                ) as run_mock,
+                    "terok.lib.orchestration.task_runners.container_start",
+                    return_value=start_result,
+                ) as mock_start,
             ):
-                run_mock.return_value = subprocess.CompletedProcess(args=[], returncode=0)
                 buffer = StringIO()
                 with redirect_stdout(buffer):
                     task_run_cli(project_id, tid)
 
-                # Verify podman start was called
-                run_mock.assert_called_once()
-                call_args = run_mock.call_args[0][0]
-                assert call_args[:2] == ["podman", "start"]
+                # Verify container_start was called with the correct name
+                mock_start.assert_called_once_with(cname)
 
                 # Verify metadata mode is preserved
                 meta = yaml_load(meta_path.read_text())

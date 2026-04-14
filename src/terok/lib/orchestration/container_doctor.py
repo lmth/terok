@@ -19,7 +19,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from terok_executor import agent_doctor_checks, get_roster
-from terok_sandbox import get_container_state, get_proxy_port, get_ssh_agent_port, make_shield
+from terok_sandbox import (
+    get_container_state,
+    get_proxy_port,
+    get_ssh_agent_port,
+    make_shield,
+    sandbox_exec,
+)
 from terok_sandbox.doctor import CheckVerdict, DoctorCheck, sandbox_doctor_checks
 
 from ..core.config import make_sandbox_config
@@ -46,13 +52,8 @@ def _exec_in_container(
     *,
     timeout: int = 10,
 ) -> subprocess.CompletedProcess[str]:
-    """Run *cmd* inside *cname* via ``podman exec`` and return the result."""
-    return subprocess.run(
-        ["podman", "exec", cname, *cmd],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    """Run *cmd* inside *cname* via the sandbox exec API."""
+    return sandbox_exec(cname, cmd, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------

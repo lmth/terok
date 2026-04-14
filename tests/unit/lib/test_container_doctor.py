@@ -25,17 +25,16 @@ MOCK_TASK_DIR = MOCK_BASE / "projects" / "proj" / "tasks" / "42"
 
 
 class TestExecInContainer:
-    """Low-level podman exec helper."""
+    """Low-level sandbox exec helper."""
 
-    def test_calls_podman_exec(self) -> None:
-        with patch("terok.lib.orchestration.container_doctor.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
+    def test_delegates_to_sandbox_exec(self) -> None:
+        with patch("terok.lib.orchestration.container_doctor.sandbox_exec") as mock_exec:
+            mock_exec.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="ok\n", stderr=""
             )
             result = _exec_in_container("proj-cli-42", ["echo", "hello"])
             assert result.returncode == 0
-            cmd = mock_run.call_args[0][0]
-            assert cmd == ["podman", "exec", "proj-cli-42", "echo", "hello"]
+            mock_exec.assert_called_once_with("proj-cli-42", ["echo", "hello"], timeout=10)
 
 
 class TestGitIdentityCheck:

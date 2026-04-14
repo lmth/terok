@@ -3,14 +3,14 @@
 
 """Container-based command execution for agent workspaces.
 
-Runs git (and other commands) **inside** task containers via ``podman exec``
-instead of on the host, eliminating the risk of poisoned git hooks or
-scripts executing with host privileges.
+Runs git (and other commands) **inside** task containers via the
+terok-sandbox ``sandbox_exec`` API instead of on the host, eliminating
+the risk of poisoned git hooks or scripts executing with host privileges.
 """
 
-import subprocess
+from subprocess import TimeoutExpired
 
-from terok_sandbox import get_container_state
+from terok_sandbox import container_start, container_stop, get_container_state, sandbox_exec
 
 from ..core.task_display import container_name as _container_name
 from ..util.logging_utils import _log_debug
@@ -19,14 +19,12 @@ from ..util.logging_utils import _log_debug
 def _podman_start(cname: str) -> bool:
     """Start a stopped container, returning ``True`` on success."""
     try:
-        subprocess.run(
-            ["podman", "start", cname],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        _log_debug(f"container_exec._podman_start({cname}): {exc}")
+        result = container_start(cname)
+    except FileNotFoundError:
+        _log_debug(f"container_exec._podman_start({cname}): podman not found")
+        return False
+    if result.returncode != 0:
+        _log_debug(f"container_exec._podman_start({cname}): rc={result.returncode}")
         return False
     return True
 
@@ -34,12 +32,7 @@ def _podman_start(cname: str) -> bool:
 def _podman_stop(cname: str, timeout: int = 10) -> None:
     """Stop a container best-effort."""
     try:
-        subprocess.run(
-            ["podman", "stop", "--time", str(timeout), cname],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        container_stop(cname, timeout=timeout)
     except FileNotFoundError:
         pass
 
@@ -89,13 +82,12 @@ def container_git_diff(
         restarted = True
 
     try:
-        cmd = ["podman", "exec", cname, "git", "-C", "/workspace", "diff", *args]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = sandbox_exec(cname, ["git", "-C", "/workspace", "diff", *args], timeout=timeout)
         if result.returncode != 0:
             _log_debug(f"container_git_diff: git diff failed rc={result.returncode}")
             return None
         return result.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (FileNotFoundError, TimeoutExpired) as exc:
         _log_debug(f"container_git_diff: {exc}")
         return None
     finally:

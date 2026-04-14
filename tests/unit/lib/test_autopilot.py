@@ -200,7 +200,7 @@ def run_followup_request(
     ):
         with (
             mock_git_config(),
-            unittest.mock.patch("terok.lib.orchestration.task_runners.subprocess.run") as run_mock,
+            unittest.mock.patch("terok.lib.orchestration.task_runners.container_start") as run_mock,
             unittest.mock.patch(
                 "terok.lib.orchestration.task_runners.get_container_state",
                 side_effect=container_state if isinstance(container_state, list) else None,
@@ -211,7 +211,7 @@ def run_followup_request(
             ) as wait_mock,
             unittest.mock.patch("terok.lib.orchestration.task_runners._print_run_summary"),
         ):
-            run_mock.return_value = subprocess.CompletedProcess([], 0)
+            run_mock.return_value = subprocess.CompletedProcess([], 0, stderr="")
             buffer = StringIO()
             with redirect_stdout(buffer):
                 task_followup_headless(project_id, task_id, prompt, follow=follow)
@@ -541,17 +541,17 @@ class TestTaskFollowupHeadless:
             assert "initial prompt" in history
             assert "---" in history
 
-    def test_followup_uses_podman_start(self) -> None:
-        """Follow-up uses podman start, not podman run."""
+    def test_followup_uses_container_start(self) -> None:
+        """Follow-up uses container_start, not sandbox.run."""
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             task_id = self._create_completed_task(base, "proj_start")
             result = run_followup_request(
                 base, "proj_start", task_id, "continue", container_state=["exited", "running"]
             )
-            cmd = result.run_mock.call_args[0][0]
-            assert cmd[0] == "podman"
-            assert cmd[1] == "start"
+            result.run_mock.assert_called_once()
+            cname = result.run_mock.call_args[0][0]
+            assert cname == f"proj_start-run-{task_id}"
 
     def test_followup_rejects_non_run_mode(self) -> None:
         """Follow-up rejects tasks that aren't headless (mode != 'run')."""
@@ -693,14 +693,14 @@ class TestTaskFollowupHeadless:
                 with (
                     mock_git_config(),
                     unittest.mock.patch(
-                        "terok.lib.orchestration.task_runners.subprocess.run"
+                        "terok.lib.orchestration.task_runners.container_start"
                     ) as run_mock,
                     unittest.mock.patch(
                         "terok.lib.orchestration.task_runners.get_container_state",
                         side_effect=["exited", "exited"],
                     ),
                 ):
-                    run_mock.return_value = subprocess.CompletedProcess([], 0)
+                    run_mock.return_value = subprocess.CompletedProcess([], 0, stderr="")
                     with pytest.raises(SystemExit) as ctx:
                         task_followup_headless("proj_startfail", task_id, "test")
                     assert "failed to start" in str(ctx.value)
@@ -729,7 +729,7 @@ class TestTaskFollowupHeadless:
                 with (
                     mock_git_config(),
                     unittest.mock.patch(
-                        "terok.lib.orchestration.task_runners.subprocess.run"
+                        "terok.lib.orchestration.task_runners.container_start"
                     ) as run_mock,
                     unittest.mock.patch(
                         "terok.lib.orchestration.task_runners.get_container_state",
@@ -741,7 +741,7 @@ class TestTaskFollowupHeadless:
                     unittest.mock.patch("terok.lib.orchestration.task_runners._print_run_summary"),
                     unittest.mock.patch("terok_sandbox.Sandbox") as mock_sandbox_cls,
                 ):
-                    run_mock.return_value = subprocess.CompletedProcess([], 0)
+                    run_mock.return_value = subprocess.CompletedProcess([], 0, stderr="")
                     buffer = StringIO()
                     with redirect_stdout(buffer):
                         task_followup_headless("proj_sealed", task_id, "sealed follow-up")

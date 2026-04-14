@@ -74,36 +74,36 @@ class TestStrToBool:
 class TestPodmanStart:
     """Verify _podman_start error handling."""
 
+    _PATCH = "terok.lib.orchestration.task_runners.container_start"
+
     def test_raises_on_missing_podman(self) -> None:
         """FileNotFoundError becomes SystemExit with install hint."""
         from terok.lib.orchestration.task_runners import _podman_start
 
         with (
-            patch("subprocess.run", side_effect=FileNotFoundError),
+            patch(self._PATCH, side_effect=FileNotFoundError),
             pytest.raises(SystemExit, match="podman not found"),
         ):
             _podman_start("test-ctr")
 
     def test_raises_on_start_failure(self) -> None:
-        """CalledProcessError becomes SystemExit with stderr message."""
+        """Non-zero returncode with stderr becomes SystemExit."""
         from terok.lib.orchestration.task_runners import _podman_start
 
-        exc = subprocess.CalledProcessError(1, ["podman", "start"])
-        exc.stderr = b"container not found"
+        result = subprocess.CompletedProcess(args=[], returncode=1, stderr="container not found")
         with (
-            patch("subprocess.run", side_effect=exc),
+            patch(self._PATCH, return_value=result),
             pytest.raises(SystemExit, match="container not found"),
         ):
             _podman_start("test-ctr")
 
     def test_raises_on_start_failure_empty_stderr(self) -> None:
-        """CalledProcessError with empty stderr still raises SystemExit."""
+        """Non-zero returncode with empty stderr still raises SystemExit."""
         from terok.lib.orchestration.task_runners import _podman_start
 
-        exc = subprocess.CalledProcessError(125, ["podman", "start"])
-        exc.stderr = b""
+        result = subprocess.CompletedProcess(args=[], returncode=125, stderr="")
         with (
-            patch("subprocess.run", side_effect=exc),
+            patch(self._PATCH, return_value=result),
             pytest.raises(SystemExit),
         ):
             _podman_start("test-ctr")
