@@ -452,15 +452,15 @@ def get_credential_proxy_bypass() -> bool:
     return _load_validated().credential_proxy.bypass_no_secret_protection
 
 
-def get_credential_proxy_transport() -> str:
-    """Return the credential proxy transport mode (``"direct"`` or ``"socket"``).
+def get_services_mode() -> str:
+    """Return the service transport mode (``"tcp"`` or ``"socket"``).
 
     Global config (config.yml)::
 
-        credential_proxy:
-          transport: socket   # or "direct"
+        services:
+          mode: tcp   # or "socket"
     """
-    return _load_validated().credential_proxy.transport
+    return _load_validated().services.mode
 
 
 def get_credential_proxy_port() -> int | None:

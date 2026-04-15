@@ -638,7 +638,7 @@ expose = [
     "is_claude_oauth_proxied",
     "is_claude_oauth_exposed",
     "get_credential_proxy_bypass",
-    "get_credential_proxy_transport",
+    "get_services_mode",
     "get_credential_proxy_port",
     "get_credential_proxy_ssh_agent_port",
     "get_shield_bypass_firewall_no_protection",

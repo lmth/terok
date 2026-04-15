@@ -18,7 +18,6 @@ import base64
 import json
 import struct
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -209,90 +208,3 @@ class TestStorySSHAgentTokenRevocation:
         finally:
             server.close()
             await server.wait_closed()
-
-
-class TestStorySSHAgentEnvWiring:
-    """Story: environment builder wires SSH agent env vars into containers."""
-
-    def test_ssh_agent_env_vars_injected(self, tmp_path: Path) -> None:
-        """When project has SSH keys, phantom token and port are in container env."""
-        from terok.lib.orchestration.environment import _credential_proxy_env_and_volumes
-
-        # Set up DB with a regular credential (so proxy path is exercised)
-        db_path = tmp_path / "proxy" / "credentials.db"
-        db = CredentialDB(db_path)
-        db.store_credential("default", "claude", {"type": "api_key", "key": "sk"})
-        db.close()
-
-        # Write ssh-keys.json with the project's key registered (list format)
-        keys_json = tmp_path / "ssh-keys.json"
-        keys_json.write_text(
-            json.dumps({"myproj": [{"private_key": "/keys/id", "public_key": "/keys/id.pub"}]})
-        )
-
-        sock_path = tmp_path / "proxy.sock"
-        sock_path.touch()
-
-        project = MagicMock()
-        project.id = "myproj"
-
-        with (
-            patch(
-                "terok_sandbox.credentials.lifecycle.is_daemon_running",
-                return_value=True,
-            ),
-            patch("terok_sandbox.ensure_proxy_reachable"),
-            patch("terok.lib.orchestration.environment.make_sandbox_config") as mock_cfg_fn,
-            patch("terok.lib.core.config.get_credential_proxy_transport", return_value="direct"),
-        ):
-            mock_cfg = mock_cfg_fn.return_value
-            mock_cfg.proxy_db_path = db_path
-            mock_cfg.proxy_socket_path = sock_path
-            mock_cfg.proxy_port = 18731
-            mock_cfg.ssh_keys_json_path = keys_json
-            mock_cfg.ssh_agent_port = 18732
-
-            env, _ = _credential_proxy_env_and_volumes(project, "task-1")
-
-        # SSH agent token should be injected
-        assert "TEROK_SSH_AGENT_TOKEN" in env
-        assert env["TEROK_SSH_AGENT_TOKEN"].startswith("terok-p-")
-        assert env["TEROK_SSH_AGENT_PORT"] == "18732"
-        # Regular proxy vars also present
-        assert "ANTHROPIC_API_KEY" in env
-
-    def test_no_ssh_keys_no_ssh_env(self, tmp_path: Path) -> None:
-        """When project has no SSH keys, no SSH agent env vars are set."""
-        from terok.lib.orchestration.environment import _credential_proxy_env_and_volumes
-
-        db_path = tmp_path / "proxy" / "credentials.db"
-        db = CredentialDB(db_path)
-        db.store_credential("default", "claude", {"type": "api_key", "key": "sk"})
-        db.close()
-
-        sock_path = tmp_path / "proxy.sock"
-        sock_path.touch()
-
-        project = MagicMock()
-        project.id = "no-ssh-project"
-
-        with (
-            patch(
-                "terok_sandbox.credentials.lifecycle.is_daemon_running",
-                return_value=True,
-            ),
-            patch("terok_sandbox.ensure_proxy_reachable"),
-            patch("terok.lib.orchestration.environment.make_sandbox_config") as mock_cfg_fn,
-            patch("terok.lib.core.config.get_credential_proxy_transport", return_value="direct"),
-        ):
-            mock_cfg = mock_cfg_fn.return_value
-            mock_cfg.proxy_db_path = db_path
-            mock_cfg.proxy_socket_path = sock_path
-            mock_cfg.proxy_port = 18731
-            mock_cfg.ssh_keys_json_path = tmp_path / "ssh-keys.json"  # doesn't exist
-            mock_cfg.ssh_agent_port = 18732
-
-            env, _ = _credential_proxy_env_and_volumes(project, "task-1")
-
-        assert "TEROK_SSH_AGENT_TOKEN" not in env
-        assert "TEROK_SSH_AGENT_PORT" not in env

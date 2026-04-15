@@ -289,11 +289,15 @@ def _ensure_proxy(*, check_only: bool, color: bool) -> bool:
     except Exception:  # noqa: BLE001 — best-effort, may not be installed
         pass
 
+    from ...lib.core.config import get_services_mode
+
+    transport = get_services_mode()
+
     try:
         from terok_executor import ensure_proxy_routes
 
         ensure_proxy_routes(cfg=cfg)
-        install_proxy_systemd(cfg=cfg)
+        install_proxy_systemd(cfg=cfg, transport=transport)
     except Exception as exc:  # noqa: BLE001 — best-effort
         print(f"  Credential proxy {_status_label(False, color)} (install failed: {exc})")
         return False
@@ -346,6 +350,10 @@ def _ensure_gate(*, check_only: bool, color: bool) -> bool:
         print(f"  Gate server      {_warn_label(color)} (systemd not available, skipping)")
         return True
 
+    from ...lib.core.config import get_services_mode
+
+    transport = get_services_mode()
+
     # Clean reinstall: stop → uninstall → install → verify
     try:
         stop_daemon(cfg=cfg)
@@ -357,7 +365,7 @@ def _ensure_gate(*, check_only: bool, color: bool) -> bool:
         pass
 
     try:
-        install_systemd_units(cfg=cfg)
+        install_systemd_units(cfg=cfg, transport=transport)
     except Exception as exc:  # noqa: BLE001 — best-effort
         print(f"  Gate server      {_status_label(False, color)} (install failed: {exc})")
         return False

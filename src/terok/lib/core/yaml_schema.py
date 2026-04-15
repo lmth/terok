@@ -464,13 +464,20 @@ class RawShieldGlobalSection(BaseModel):
     on_task_restart: Literal["retain", "up"] = "retain"
 
 
+class RawServicesSection(BaseModel):
+    """Global ``services:`` section — transport mode for host ↔ container IPC."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["tcp", "socket"] = "tcp"
+
+
 class RawCredentialProxySection(BaseModel):
     """Global ``credential_proxy:`` section."""
 
     model_config = ConfigDict(extra="forbid")
 
     bypass_no_secret_protection: bool = False
-    transport: Literal["direct", "socket"] = "socket"
     port: int | None = Field(default=None, ge=1, le=65535)
     ssh_agent_port: int | None = Field(default=None, ge=1, le=65535)
 
@@ -531,6 +538,7 @@ class RawGlobalConfig(BaseModel):
     tui: RawTUISection = Field(default_factory=RawTUISection)
     logs: RawLogsSection = Field(default_factory=RawLogsSection)
     shield: RawShieldGlobalSection = Field(default_factory=RawShieldGlobalSection)
+    services: RawServicesSection = Field(default_factory=RawServicesSection)
     credential_proxy: RawCredentialProxySection = Field(default_factory=RawCredentialProxySection)
     gate_server: RawGateServerSection = Field(default_factory=RawGateServerSection)
     network: RawNetworkSection = Field(default_factory=RawNetworkSection)
@@ -549,6 +557,7 @@ class RawGlobalConfig(BaseModel):
             "tui",
             "logs",
             "shield",
+            "services",
             "credential_proxy",
             "gate_server",
             "network",
