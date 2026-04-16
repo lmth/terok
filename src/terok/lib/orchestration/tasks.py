@@ -18,6 +18,7 @@ import secrets
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from terok_sandbox import (
@@ -122,6 +123,7 @@ class TaskMeta(TaskState):
     work_status: str | None = None
     work_message: str | None = None
     shield_state: str | None = None
+    created_at: str | None = None
 
     @property
     def status(self) -> str:
@@ -264,6 +266,7 @@ def get_task_meta(project_id: str, task_id: str) -> TaskMeta:
         unrestricted=raw.get("unrestricted"),
         work_status=ws_status,
         work_message=ws_message,
+        created_at=raw.get("created_at"),
     )
 
 
@@ -402,6 +405,7 @@ def _task_new(project: ProjectConfig, *, name: str | None = None) -> str:
         "mode": None,
         "workspace": str(ws),
         "web_port": None,
+        "created_at": datetime.now(tz=UTC).isoformat(),
     }
     (meta_dir / f"{next_id}.yml").write_text(_yaml_dump(meta))
     print(f"Created task {next_id} ({task_name}) in {ws}")
@@ -509,6 +513,7 @@ def _get_tasks(project_id: str, reverse: bool = False) -> list[TaskMeta]:
                     unrestricted=meta.get("unrestricted"),
                     work_status=ws_status,
                     work_message=ws_message,
+                    created_at=meta.get("created_at"),
                 )
             )
         except Exception as exc:
@@ -997,6 +1002,7 @@ def task_status(project_id: str, task_id: str) -> None:
         name=meta["name"],
         provider=meta.get("provider"),
         unrestricted=meta.get("unrestricted"),
+        created_at=meta.get("created_at"),
     )
     status = effective_status(task)
     info = STATUS_DISPLAY.get(status, STATUS_DISPLAY["created"])
