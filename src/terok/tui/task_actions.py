@@ -215,9 +215,16 @@ class TaskActionsMixin:
 
         # Resolve default login agent: project → global → "bash"
         default_login = "bash"
+        installed: frozenset[str] | None = None
         try:
             project = load_project(pid)
             default_login = project.default_login or "bash"
+            # podman inspect would block the event loop; offload it.
+            import asyncio
+
+            from terok.lib.core.images import installed_agents_for_project
+
+            installed = await asyncio.to_thread(installed_agents_for_project, project)
         except (SystemExit, Exception):
             pass
 
@@ -228,6 +235,7 @@ class TaskActionsMixin:
                 task_id=task_id,
                 task_name=name,
                 default_login=default_login,
+                installed=installed,
             ),
             self._on_launch_screen_result,
         )
@@ -348,8 +356,26 @@ class TaskActionsMixin:
         raw_subagents = project.agent_config.get("subagents", [])
         subagents = self._normalize_subagents(raw_subagents) if raw_subagents else []
 
+        # podman inspect would block the event loop; offload it.
+        import asyncio
+
+        from terok.lib.core.images import installed_agents_for_project
+
+        installed: frozenset[str] | None = None
+        try:
+            installed = await asyncio.to_thread(installed_agents_for_project, project)
+        except (SystemExit, Exception):
+            # podman missing or inspect failure — fall back to unfiltered picker
+            # (unlabeled images are treated as unrestricted) rather than aborting
+            # the autopilot flow.
+            pass
+
         await self.push_screen(
-            AgentSelectionScreen(subagents=subagents or None, default_agent=default_agent),
+            AgentSelectionScreen(
+                subagents=subagents or None,
+                default_agent=default_agent,
+                installed=installed,
+            ),
             self._on_agent_selection_result,
         )
 

@@ -524,13 +524,13 @@ class Project:
         generate_dockerfiles(self._config.id)
 
     def build_images(
-        self, *, include_dev: bool = False, rebuild_agents: bool = False, full: bool = False
+        self, *, include_dev: bool = False, refresh_agents: bool = False, full: bool = False
     ) -> None:
         """Build container images for this project."""
         build_images(
             self._config.id,
             include_dev=include_dev,
-            rebuild_agents=rebuild_agents,
+            refresh_agents=refresh_agents,
             full_rebuild=full,
         )
 

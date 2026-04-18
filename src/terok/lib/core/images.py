@@ -4,8 +4,19 @@
 
 """Container image tag conventions for the terok layer system (L0/L1/L2)."""
 
+from __future__ import annotations
+
 import hashlib
+import json
 import re
+import subprocess
+from functools import lru_cache
+from typing import TYPE_CHECKING
+
+from terok_executor import AGENTS_LABEL
+
+if TYPE_CHECKING:
+    from terok.lib.core.project_model import ProjectConfig
 
 
 def _base_tag(base_image: str) -> str:
@@ -40,3 +51,78 @@ def project_cli_image(project_id: str) -> str:
 def project_dev_image(project_id: str) -> str:
     """Return the L2 dev project image tag for *project_id*."""
     return f"{project_id}:l2-dev"
+
+
+@lru_cache(maxsize=64)
+def installed_agents(image_tag: str) -> frozenset[str]:
+    """Return the set of agent names baked into *image_tag*.
+
+    Reads the ``ai.terok.agents`` OCI label written by terok-executor's L1
+    build (a sorted comma-separated list).  Result is cached per image
+    tag, since the label is fixed for the life of an image.
+
+    When the image is not present locally, or the label is missing
+    (e.g. a legacy image built before selectable agents), returns an
+    empty set — callers treat empty as "unknown / unrestricted" so older
+    images keep working.
+    """
+    try:
+        result = subprocess.run(
+            ["podman", "inspect", "--format", "{{json .Config.Labels}}", image_tag],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return frozenset()
+
+    try:
+        labels = json.loads(result.stdout) or {}
+    except json.JSONDecodeError:
+        return frozenset()
+
+    csv = (labels.get(AGENTS_LABEL) or "").strip()
+    if not csv:
+        return frozenset()
+    return frozenset(name.strip() for name in csv.split(",") if name.strip())
+
+
+def installed_agents_for_project(project: ProjectConfig) -> frozenset[str]:
+    """Return the agents installed in *project*'s L1 image.
+
+    Convenience over :func:`installed_agents` for the very common
+    ``installed_agents(agent_cli_image(project.base_image))`` pattern.
+    """
+    return installed_agents(agent_cli_image(project.base_image))
+
+
+def is_installed(name: str, image_tag: str) -> bool:
+    """Return whether *name* is baked into *image_tag*.
+
+    Treats an unknown / unlabeled image (empty :func:`installed_agents`
+    result) as "unrestricted" — every name is considered installed —
+    so legacy images keep working until the user rebuilds.
+    """
+    installed = installed_agents(image_tag)
+    return not installed or name in installed
+
+
+def require_agent_installed(project: ProjectConfig, name: str, *, noun: str = "Agent") -> None:
+    """Fail fast if *name* is not baked into *project*'s L1 image.
+
+    Used at CLI / TUI / runtime entry points so the user sees a clear,
+    actionable message instead of a deep ``command not found`` later.
+    Unlabeled (legacy) images are treated as unrestricted via
+    :func:`is_installed`.
+    """
+    image = agent_cli_image(project.base_image)
+    if is_installed(name, image):
+        return
+    available = ", ".join(sorted(installed_agents(image))) or "(none)"
+    raise SystemExit(
+        f"{noun} {name!r} is not installed in the L1 image for "
+        f"project {project.id!r} ({image}).\n"
+        f"Installed: {available}\n"
+        f"Add it to image.agents and rebuild: "
+        f"terok build --agents {name} {project.id}"
+    )

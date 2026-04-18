@@ -321,6 +321,13 @@ class RawImageSection(BaseModel):
             "when the image is outside the known allowlist."
         ),
     )
+    agents: str | None = Field(
+        default=None,
+        description=(
+            'Comma-separated roster entries to install in L1, or "all". '
+            "Inherits from the global config when unset."
+        ),
+    )
     user_snippet_inline: str | None = Field(
         default=None, description="Inline Dockerfile snippet injected into the project image"
     )
@@ -553,6 +560,7 @@ class RawGlobalConfig(BaseModel):
     tasks: RawTasksGlobalSection = Field(default_factory=RawTasksGlobalSection)
     git: RawGlobalGitSection = Field(default_factory=RawGlobalGitSection)
     hooks: RawHooksSection = Field(default_factory=RawHooksSection)
+    image: RawImageSection = Field(default_factory=RawImageSection)
     experimental: bool = False
     default_agent: str | None = None
     default_login: str | None = None
@@ -572,6 +580,7 @@ class RawGlobalConfig(BaseModel):
             "tasks",
             "git",
             "hooks",
+            "image",
             "agent",
         }
     )

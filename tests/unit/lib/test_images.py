@@ -128,3 +128,56 @@ def test_base_image_functions_reuse_the_same_long_tag() -> None:
     long_name = "x" * 150
     tags = {func(long_name).split(":", 1)[1] for func, _ in BASE_IMAGE_FUNCS}
     assert len(tags) == 1
+
+
+# ── installed_agents / is_installed ───────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_installed_agents_cache() -> None:
+    """Drop the lru_cache between tests so each test sees a fresh inspect."""
+    images.installed_agents.cache_clear()
+
+
+def _patch_inspect(monkeypatch: pytest.MonkeyPatch, stdout: str | Exception) -> None:
+    """Stub ``subprocess.run`` for ``podman inspect`` calls."""
+    import subprocess
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        if isinstance(stdout, Exception):
+            raise stdout
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(images.subprocess, "run", fake_run)
+
+
+def test_installed_agents_parses_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_inspect(monkeypatch, '{"ai.terok.agents": "claude,codex,opencode"}')
+    assert images.installed_agents("terok-l1-cli:test") == frozenset(
+        {"claude", "codex", "opencode"}
+    )
+
+
+def test_installed_agents_missing_label_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_inspect(monkeypatch, "{}")
+    assert images.installed_agents("terok-l1-cli:legacy") == frozenset()
+
+
+def test_installed_agents_missing_image_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    _patch_inspect(monkeypatch, subprocess.CalledProcessError(1, "podman"))
+    assert images.installed_agents("terok-l1-cli:nope") == frozenset()
+
+
+def test_is_installed_treats_unlabeled_as_unrestricted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Legacy / unlabeled image: every agent is considered installed so
+    # older builds keep working until the user rebuilds.
+    _patch_inspect(monkeypatch, "{}")
+    assert images.is_installed("anything", "terok-l1-cli:legacy") is True
+
+
+def test_is_installed_filters_by_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_inspect(monkeypatch, '{"ai.terok.agents": "claude,codex"}')
+    assert images.is_installed("claude", "terok-l1-cli:test") is True
+    assert images.is_installed("vibe", "terok-l1-cli:test") is False

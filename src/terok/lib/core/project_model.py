@@ -78,6 +78,8 @@ class ProjectConfig(BaseModel):
     explicitly when the auto-detect allowlist doesn't recognise the
     image (rocky, alma, suse, …).
     """
+    agents: str = "all"
+    """Comma-separated roster entries to install in L1 (or ``"all"``)."""
     snippet_inline: str | None = None
     snippet_file: str | None = None
     # Shared task directory (multi-agent IPC)

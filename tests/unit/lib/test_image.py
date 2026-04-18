@@ -510,7 +510,7 @@ class TestBuildManifest:
 
         with image_project("proj_build_manifest"):
             generate_dockerfiles("proj_build_manifest")
-            build_commands("proj_build_manifest", rebuild_agents=True)
+            build_commands("proj_build_manifest", refresh_agents=True)
             manifest = read_build_manifest("proj_build_manifest")
 
         assert manifest is not None
@@ -518,8 +518,8 @@ class TestBuildManifest:
         assert "l0" in manifest and "l1" in manifest and "l2_cli" in manifest
         assert all(manifest[k]["content_hash"] for k in ("l0", "l1"))
 
-    def test_rebuild_agents_writes_fresh_hashes(self) -> None:
-        """rebuild_agents=True records current hashes, not carried-forward ones."""
+    def test_refresh_agents_writes_fresh_hashes(self) -> None:
+        """refresh_agents=True records current hashes, not carried-forward ones."""
         from terok.lib.orchestration.image import (
             _write_build_manifest,
             read_build_manifest,
@@ -540,7 +540,7 @@ class TestBuildManifest:
                 },
             )
             # Build with --agents → L0/L1 rebuilt → fresh hashes
-            build_commands("proj_rebuild", rebuild_agents=True)
+            build_commands("proj_rebuild", refresh_agents=True)
             manifest = read_build_manifest("proj_rebuild")
 
         assert manifest is not None
@@ -569,7 +569,7 @@ class TestBuildManifest:
                     "combined_hash": "old-combined",
                 },
             )
-            # Default build (rebuild_agents=False) → L0/L1 skipped
+            # Default build (refresh_agents=False) → L0/L1 skipped
             build_commands("proj_skip")
             manifest = read_build_manifest("proj_skip")
 

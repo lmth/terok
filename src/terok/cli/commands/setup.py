@@ -18,6 +18,7 @@ import sys
 
 from terok_executor import AUTH_PROVIDERS
 
+from ...lib.core.images import require_agent_installed
 from ...lib.core.projects import load_project
 from ...lib.domain.facade import (
     authenticate,
@@ -62,9 +63,20 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     p_build = subparsers.add_parser("build", help="Build images for a project")
     _add_project_arg(p_build)
     p_build.add_argument(
-        "--agents",
+        "--refresh-agents",
+        dest="refresh_agents",
         action="store_true",
-        help="Rebuild from L0 with fresh agents (codex, claude, opencode, vibe)",
+        help="Rebuild from L0 with fresh agent installs (cache bust)",
+    )
+    p_build.add_argument(
+        "--agents",
+        dest="agents",
+        default=None,
+        metavar="LIST",
+        help=(
+            'Comma-separated roster entries to install in L1, or "all". '
+            "Overrides the project's image.agents for this build only."
+        ),
     )
     p_build.add_argument(
         "--full-rebuild",
@@ -143,8 +155,9 @@ def dispatch(args: argparse.Namespace) -> bool:
         build_images(
             args.project_id,
             include_dev=getattr(args, "dev", False),
-            rebuild_agents=getattr(args, "agents", False),
+            refresh_agents=getattr(args, "refresh_agents", False),
             full_rebuild=getattr(args, "full_rebuild", False),
+            agents=getattr(args, "agents", None),
         )
         return True
     if args.cmd == "ssh-init":
@@ -172,6 +185,7 @@ def dispatch(args: argparse.Namespace) -> bool:
         cmd_project_init(args.project_id)
         return True
     if args.cmd == "auth":
+        require_agent_installed(load_project(args.project_id), args.provider, noun="Provider")
         authenticate(args.project_id, args.provider)
         return True
     return False

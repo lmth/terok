@@ -25,6 +25,7 @@ from terok_executor import (
     build_base_images,
     detect_family,
     l0_image_tag,
+    parse_agent_selection,
     stage_scripts,
     stage_tmux_config,
     stage_toad_agents,
@@ -294,8 +295,9 @@ def generate_dockerfiles(project_id: str, *, family: str | None = None) -> None:
 def build_images(
     project_id: str,
     include_dev: bool = False,
-    rebuild_agents: bool = False,
+    refresh_agents: bool = False,
     full_rebuild: bool = False,
+    agents: str | None = None,
 ) -> None:
     """Build container images for a project.
 
@@ -306,22 +308,28 @@ def build_images(
     Args:
         project_id: The project to build images for.
         include_dev: Also build a dev image from L0 (tagged as <project>:l2-dev).
-        rebuild_agents: Rebuild L0+L1 with fresh agents (cache bust).
+        refresh_agents: Rebuild L0+L1 with fresh agents (cache bust).
         full_rebuild: Rebuild everything with ``--no-cache --pull=always``.
+        agents: One-shot override for the agent selection (comma-list or
+            ``"all"``).  When ``None``, ``project.agents`` is used (which
+            itself inherits from the global ``image.agents`` config).
     """
     _check_podman_available()
 
     project = load_project(project_id)
     base_image = project.base_image
     stage_dir = build_dir() / project.id
-    rebuilt_base = rebuild_agents or full_rebuild
+    rebuilt_base = refresh_agents or full_rebuild
+
+    agents_arg = parse_agent_selection(agents if agents is not None else project.agents)
 
     # Delegate L0+L1 to terok-executor (uses its own temp dir for build context)
     try:
         base_images = build_base_images(
             base_image,
             family=project.family,
-            rebuild=rebuild_agents,
+            agents=agents_arg,
+            rebuild=refresh_agents,
             full_rebuild=full_rebuild,
         )
     except BuildError as e:

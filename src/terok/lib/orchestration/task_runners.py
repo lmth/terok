@@ -41,7 +41,7 @@ from ..core.config import (
     make_sandbox_config,
     sandbox_live_mounts_dir,
 )
-from ..core.images import project_cli_image
+from ..core.images import project_cli_image, require_agent_installed
 from ..core.projects import load_project
 from ..core.task_display import has_gpu
 from ..util.ansi import (
@@ -722,6 +722,7 @@ def task_run_headless(request: HeadlessRunRequest) -> str:
 
     project = load_project(request.project_id)
     resolved = get_provider(request.provider, default_agent=project.default_agent)
+    require_agent_installed(project, resolved.name)
 
     # Build CLI overrides from --config file and explicit flags
     cli_overrides: dict = {}

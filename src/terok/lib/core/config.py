@@ -408,6 +408,16 @@ def get_global_default_login() -> str | None:
     return _load_validated().default_login
 
 
+def get_global_image_agents() -> str:
+    """Return ``image.agents`` from the global config (defaults to ``"all"``).
+
+    The value is a comma-separated list of roster entries (or the literal
+    string ``"all"``) that drives which agents are baked into L1 builds.
+    Project YAML may override this via its own ``image.agents``.
+    """
+    return _load_validated().image.agents or "all"
+
+
 def get_tui_default_tmux() -> bool:
     """Return whether to default to tmux mode for TUI, or False if not set."""
     return _load_validated().tui.default_tmux
