@@ -124,5 +124,5 @@ def require_agent_installed(project: ProjectConfig, name: str, *, noun: str = "A
         f"project {project.id!r} ({image}).\n"
         f"Installed: {available}\n"
         f"Add it to image.agents and rebuild: "
-        f"terok build --agents {name} {project.id}"
+        f"terok project build --agents {name} {project.id}"
     )

@@ -17,6 +17,7 @@ from terok.cli.commands.setup import (
     _ensure_shield,
     _ensure_vault,
     cmd_setup,
+    dispatch,
 )
 from tests.testfs import FAKE_CREDENTIALS_DIR, MOCK_BASE
 from tests.testgate import make_gate_server_status
@@ -436,7 +437,7 @@ def test_cmd_setup_all_ok(
     cmd_setup(check_only=False)
     out = capsys.readouterr().out
     assert "Setup complete" in out
-    assert "project-wizard" in out
+    assert "project wizard" in out
 
 
 @patch("terok.cli.commands.setup._ensure_gate", return_value=True)
@@ -566,3 +567,34 @@ def test_cmd_setup_selinux_missing_exits_1(
     with pytest.raises(SystemExit) as exc:
         cmd_setup(check_only=False)
     assert exc.value.code == 1
+
+
+# ── Dispatch ────────────────────────────────────────────────────────────
+
+
+class TestDispatch:
+    """``setup.dispatch`` only handles the ``setup`` top-level verb."""
+
+    def test_ignores_non_setup(self) -> None:
+        """Non-setup namespaces fall through."""
+        import argparse
+
+        assert dispatch(argparse.Namespace(cmd="task")) is False
+
+    def test_setup_invokes_cmd_setup(self) -> None:
+        """``terok setup`` calls cmd_setup with the --check flag propagated."""
+        import argparse
+
+        args = argparse.Namespace(cmd="setup", check=True)
+        with patch("terok.cli.commands.setup.cmd_setup") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with(check_only=True)
+
+    def test_setup_defaults_check_to_false(self) -> None:
+        """Missing --check attribute defaults to check_only=False."""
+        import argparse
+
+        args = argparse.Namespace(cmd="setup")
+        with patch("terok.cli.commands.setup.cmd_setup") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with(check_only=False)

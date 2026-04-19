@@ -119,7 +119,7 @@ def test_config_command_color_output(tmp_path: Path, capsys: pytest.CaptureFixtu
     layout = make_config_layout(tmp_path)
 
     with patch_config_command(layout):
-        run_cli("config")
+        run_cli("config", "paths")
 
     output = capsys.readouterr().out
     assert "\x1b[32myes\x1b[0m" in output
@@ -171,3 +171,61 @@ def test_import_rejects_invalid_configs(
 
     with pytest.raises(SystemExit, match=expected_message):
         run_import(source, envs_root)
+
+
+class TestConfigDispatch:
+    """The ``config`` group routes each subcommand to the right handler."""
+
+    def test_ignores_non_config(self) -> None:
+        """Dispatch returns False for commands outside the config group."""
+        import argparse
+
+        from terok.cli.commands.info import dispatch
+
+        assert dispatch(argparse.Namespace(cmd="task")) is False
+
+    def test_paths_invokes_print_config(self) -> None:
+        """``config paths`` routes to ``_print_config``."""
+        import argparse
+
+        from terok.cli.commands.info import dispatch
+
+        args = argparse.Namespace(cmd="config", config_cmd="paths")
+        with patch("terok.cli.commands.info._print_config") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once()
+
+    def test_show_invokes_config_show(self) -> None:
+        """``config show`` forwards project_id and preset to the handler."""
+        import argparse
+
+        from terok.cli.commands.info import dispatch
+
+        args = argparse.Namespace(
+            cmd="config", config_cmd="show", project_id="myproj", preset="team"
+        )
+        with patch("terok.cli.commands.info._cmd_config_show") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with("myproj", "team")
+
+    def test_show_defaults_preset_to_none(self) -> None:
+        """``config show`` without --preset passes None through."""
+        import argparse
+
+        from terok.cli.commands.info import dispatch
+
+        args = argparse.Namespace(cmd="config", config_cmd="show", project_id="p")
+        with patch("terok.cli.commands.info._cmd_config_show") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with("p", None)
+
+    def test_import_opencode_invokes_importer(self) -> None:
+        """``config import-opencode`` routes to the importer with the file path."""
+        import argparse
+
+        from terok.cli.commands.info import dispatch
+
+        args = argparse.Namespace(cmd="config", config_cmd="import-opencode", file="/tmp/oc.json")
+        with patch("terok.cli.commands.info._cmd_import_opencode") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with("/tmp/oc.json")

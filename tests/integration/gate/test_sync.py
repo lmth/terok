@@ -53,7 +53,7 @@ class TestGateSync:
             ),
         )
 
-        created = terok_env.run_cli("gate-sync", "demo")
+        created = terok_env.run_cli("project", "gate-sync", "demo")
         assert f"Gate ready at {gate_path}" in created.stdout
         assert (
             run_git("rev-parse", "--is-bare-repository", repo_path=gate_path).stdout.strip()
@@ -62,7 +62,7 @@ class TestGateSync:
         assert git_head(gate_path, "refs/heads/main") == git_head(upstream, "refs/heads/main")
 
         append_commit_to_bare_repo(upstream, "main", "CHANGELOG.md", "v2\n", "Update upstream")
-        synced = terok_env.run_cli("gate-sync", "demo")
+        synced = terok_env.run_cli("project", "gate-sync", "demo")
 
         assert "created: False" in synced.stdout
         assert git_head(gate_path, "refs/heads/main") == git_head(upstream, "refs/heads/main")
@@ -87,7 +87,7 @@ class TestGateSync:
             ),
         )
 
-        terok_env.run_cli("gate-sync", "alpha")
+        terok_env.run_cli("project", "gate-sync", "alpha")
         terok_env.write_project(
             "beta",
             PROJECT_TEMPLATE.format(
@@ -96,7 +96,7 @@ class TestGateSync:
                 gate_path=shared_gate,
             ),
         )
-        conflict = terok_env.run_cli("gate-sync", "beta", check=False)
+        conflict = terok_env.run_cli("project", "gate-sync", "beta", check=False)
         combined = f"{conflict.stdout}\n{conflict.stderr}"
 
         assert conflict.returncode != 0

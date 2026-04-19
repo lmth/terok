@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Informational CLI commands: config overview and resolved agent config."""
+"""``config`` subcommand group — paths overview, resolved agent config, imports."""
 
 from __future__ import annotations
 
@@ -36,40 +36,43 @@ from .completions import is_completion_installed as _is_completion_installed
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """Register informational subcommands (config, config-show)."""
-    # config overview (with optional import-opencode subcommand)
-    p_config = subparsers.add_parser("config", help="Show configuration, template and output paths")
-    config_sub = p_config.add_subparsers(dest="config_cmd")
+    """Register the ``config`` subcommand group."""
+    p_config = subparsers.add_parser("config", help="Configuration: paths, resolved agent, imports")
+    config_sub = p_config.add_subparsers(dest="config_cmd", required=True)
+
+    # config paths — overview of configuration, template and output paths
+    config_sub.add_parser("paths", help="Show configuration, template and output paths")
+
+    # config show — resolved agent config with provenance
+    p_show = config_sub.add_parser(
+        "show",
+        help="Show resolved agent config for a project (with provenance per level)",
+    )
+    set_completer(p_show.add_argument("project_id", help="Project ID"), _complete_project_ids)
+    p_show.add_argument("--preset", help="Apply a preset before showing resolved config")
+
+    # config import-opencode — unchanged semantics, now under the group
     p_import_oc = config_sub.add_parser(
         "import-opencode",
         help="Import an OpenCode config file into the shared opencode mount",
     )
     p_import_oc.add_argument("file", help="Path to an opencode.json file to import")
 
-    # config-show (resolved agent config with provenance)
-    p_config_show = subparsers.add_parser(
-        "config-show",
-        help="Show resolved agent config for a project (with provenance per level)",
-    )
-    set_completer(
-        p_config_show.add_argument("project_id", help="Project ID"), _complete_project_ids
-    )
-    p_config_show.add_argument("--preset", help="Apply a preset before showing resolved config")
-
 
 def dispatch(args: argparse.Namespace) -> bool:
-    """Handle config and config-show commands.  Returns True if handled."""
-    if args.cmd == "config":
-        config_cmd = getattr(args, "config_cmd", None)
-        if config_cmd == "import-opencode":
-            _cmd_import_opencode(args.file)
-        else:
+    """Handle the ``config`` group.  Returns True if handled."""
+    if args.cmd != "config":
+        return False
+    match args.config_cmd:
+        case "paths":
             _print_config()
-        return True
-    if args.cmd == "config-show":
-        _cmd_config_show(args.project_id, getattr(args, "preset", None))
-        return True
-    return False
+        case "show":
+            _cmd_config_show(args.project_id, getattr(args, "preset", None))
+        case "import-opencode":
+            _cmd_import_opencode(args.file)
+        case _:  # pragma: no cover — required=True makes argparse enforce this
+            return False
+    return True
 
 
 def _cmd_config_show(project_id: str, preset: str | None) -> None:

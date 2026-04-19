@@ -10,11 +10,11 @@ from unittest.mock import patch
 
 
 def test_project_wizard_dispatch(monkeypatch) -> None:
-    """``terok project-wizard`` dispatches to ``run_wizard`` with ``cmd_project_init``."""
+    """``terok project wizard`` dispatches to ``run_wizard`` with ``cmd_project_init``."""
     from terok.cli.commands.setup import cmd_project_init
     from terok.cli.main import main
 
-    monkeypatch.setattr(sys, "argv", ["terok", "project-wizard"])
+    monkeypatch.setattr(sys, "argv", ["terok", "project", "wizard"])
     with patch("terok.cli.commands.project.run_wizard") as mock_wizard:
         main()
 

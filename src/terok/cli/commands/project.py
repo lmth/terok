@@ -1,33 +1,53 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Project management commands: list, derive, wizard, presets, delete."""
+"""``project`` subcommand group — all per-project operations."""
 
 from __future__ import annotations
 
 import argparse
 
+from terok_executor import AUTH_PROVIDERS
+
+from ...lib.core.images import require_agent_installed
 from ...lib.core.projects import list_presets, list_projects, load_project
-from ...lib.domain.facade import delete_project, derive_project, find_projects_sharing_gate
+from ...lib.domain.facade import (
+    authenticate,
+    build_images,
+    delete_project,
+    derive_project,
+    find_projects_sharing_gate,
+    generate_dockerfiles,
+    register_ssh_key,
+)
+from ...lib.domain.project import make_git_gate, make_ssh_manager
 from ...lib.domain.wizards.new_project import offer_edit_then_init, run_wizard
 from ._completers import complete_project_ids as _complete_project_ids, set_completer
 from .setup import cmd_project_init
 
 
-def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """Register project management subcommands."""
-    # projects
-    subparsers.add_parser("projects", help="List all known projects")
+def _add_project_arg(parser: argparse.ArgumentParser, **kwargs: object) -> None:
+    """Add a ``project_id`` positional with project-ID completion."""
+    set_completer(parser.add_argument("project_id", **kwargs), _complete_project_ids)
 
-    # project-wizard
-    subparsers.add_parser(
-        "project-wizard",
+
+def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``project`` subcommand group."""
+    p = subparsers.add_parser("project", help="Create, configure, and manage projects")
+    sub = p.add_subparsers(dest="project_cmd", required=True)
+
+    # list
+    sub.add_parser("list", help="List all known projects")
+
+    # wizard
+    sub.add_parser(
+        "wizard",
         help="Interactive wizard to create a new project configuration",
     )
 
-    # project-derive
-    p_derive = subparsers.add_parser(
-        "project-derive",
+    # derive
+    p_derive = sub.add_parser(
+        "derive",
         help="Create a new project derived from an existing one (shared infra, fresh agent config)",
     )
     set_completer(
@@ -36,70 +56,172 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     p_derive.add_argument("new_id", help="New project ID")
 
-    # project-delete
-    p_delete = subparsers.add_parser(
-        "project-delete",
+    # delete
+    p_delete = sub.add_parser(
+        "delete",
         help="Delete a project and all its associated data (non-recoverable)",
     )
-    set_completer(
-        p_delete.add_argument("project_id", help="Project ID to delete"),
-        _complete_project_ids,
-    )
+    _add_project_arg(p_delete, help="Project ID to delete")
     p_delete.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
-    # presets
-    p_presets = subparsers.add_parser("presets", help="Manage agent config presets")
-    presets_sub = p_presets.add_subparsers(dest="presets_cmd", required=True)
-    p_presets_list = presets_sub.add_parser("list", help="List available presets for a project")
-    set_completer(
-        p_presets_list.add_argument("project_id", help="Project ID"), _complete_project_ids
+    # init — full setup
+    p_init = sub.add_parser(
+        "init",
+        help="Full project setup: ssh-init + generate + build + gate-sync",
     )
+    _add_project_arg(p_init)
+
+    # generate
+    p_gen = sub.add_parser("generate", help="Generate Dockerfiles for a project")
+    _add_project_arg(p_gen)
+
+    # build
+    p_build = sub.add_parser("build", help="Build images for a project")
+    _add_project_arg(p_build)
+    p_build.add_argument(
+        "--refresh-agents",
+        dest="refresh_agents",
+        action="store_true",
+        help="Rebuild from L0 with fresh agent installs (cache bust)",
+    )
+    p_build.add_argument(
+        "--agents",
+        dest="agents",
+        default=None,
+        metavar="LIST",
+        help=(
+            'Comma-separated roster entries to install in L1, or "all". '
+            "Overrides the project's image.agents for this build only."
+        ),
+    )
+    p_build.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="Rebuild from L0 (no cache) (includes base image pull and apt packages)",
+    )
+    p_build.add_argument(
+        "--dev",
+        action="store_true",
+        help="Also build a manual dev image from L0 (tagged as <project>:l2-dev)",
+    )
+
+    # ssh-init
+    p_ssh = sub.add_parser(
+        "ssh-init",
+        help="Initialize shared SSH dir and generate a keypair for a project",
+    )
+    _add_project_arg(p_ssh)
+    p_ssh.add_argument(
+        "--key-type",
+        choices=["ed25519", "rsa"],
+        default="ed25519",
+        help="Key algorithm (default: ed25519)",
+    )
+    p_ssh.add_argument(
+        "--key-name",
+        default=None,
+        help="Key file name (without .pub). Default: id_<type>_<project>",
+    )
+    p_ssh.add_argument("--force", action="store_true", help="Overwrite existing key and config")
+
+    # gate-sync
+    p_gate = sub.add_parser(
+        "gate-sync",
+        help=(
+            "Sync the host-side git gate for a project (creates it if missing). "
+            "For SSH upstreams this uses ONLY the project's ssh dir created by "
+            "'project ssh-init' (not ~/.ssh)."
+        ),
+    )
+    _add_project_arg(p_gate)
+    p_gate.add_argument(
+        "--force-reinit",
+        dest="force_reinit",
+        action="store_true",
+        help="Recreate the mirror from scratch",
+    )
+
+    # auth
+    provider_names = list(AUTH_PROVIDERS)
+    providers_help = ", ".join(f"{p.name} ({p.label})" for p in AUTH_PROVIDERS.values())
+    p_auth = sub.add_parser(
+        "auth",
+        help="Authenticate an agent/tool for a project",
+        description=f"Available providers: {providers_help}",
+    )
+    p_auth.add_argument("provider", choices=provider_names, metavar="provider")
+    _add_project_arg(p_auth)
+
+    # presets (leaf — takes project_id directly; no further subcommand)
+    p_presets = sub.add_parser("presets", help="List available presets for a project")
+    _add_project_arg(p_presets)
 
 
 def dispatch(args: argparse.Namespace) -> bool:
-    """Handle project management commands.  Returns True if handled."""
-    if args.cmd == "projects":
-        projs = list_projects()
-        if not projs:
-            print("No projects found")
-        else:
-            print("Known projects:")
-            for p in projs:
-                upstream = p.upstream_url or "-"
-                shared = f" shared={p.shared_dir}" if p.shared_dir else ""
-                print(
-                    f"- {p.id} [{p.security_class}] upstream={upstream}{shared}"
-                    f" config_root={p.root}"
-                )
-        return True
-    if args.cmd == "project-derive":
-        project = derive_project(args.source_id, args.new_id)
-        config_path = project.config.root / "project.yml"
-        print(
-            f"Derived project '{args.new_id}' from '{args.source_id}' — "
-            f"shares git gate and SSH key with source.\n"
-            f"Config: {config_path}"
-        )
-        offer_edit_then_init(config_path, args.new_id, init_fn=cmd_project_init)
-        return True
-    if args.cmd == "project-delete":
-        _cmd_project_delete(args.project_id, force=args.force)
-        return True
-    if args.cmd == "project-wizard":
-        run_wizard(init_fn=cmd_project_init)
-        return True
-    if args.cmd == "presets":
-        if args.presets_cmd == "list":
-            presets = list_presets(args.project_id)
-            if not presets:
-                print(f"No presets found for project '{args.project_id}'")
-            else:
-                print(f"Presets for '{args.project_id}':")
-                for info in presets:
-                    print(f"  - {info.name} ({info.source})")
-            return True
+    """Handle the ``project`` group.  Returns True if handled."""
+    if args.cmd != "project":
         return False
-    return False
+    match args.project_cmd:
+        case "list":
+            _cmd_project_list()
+        case "wizard":
+            run_wizard(init_fn=cmd_project_init)
+        case "derive":
+            _cmd_project_derive(args.source_id, args.new_id)
+        case "delete":
+            _cmd_project_delete(args.project_id, force=args.force)
+        case "init":
+            cmd_project_init(args.project_id)
+        case "generate":
+            generate_dockerfiles(args.project_id)
+        case "build":
+            build_images(
+                args.project_id,
+                include_dev=getattr(args, "dev", False),
+                refresh_agents=getattr(args, "refresh_agents", False),
+                full_rebuild=getattr(args, "full_rebuild", False),
+                agents=getattr(args, "agents", None),
+            )
+        case "ssh-init":
+            _cmd_ssh_init(args)
+        case "gate-sync":
+            _cmd_gate_sync(args)
+        case "auth":
+            require_agent_installed(load_project(args.project_id), args.provider, noun="Provider")
+            authenticate(args.project_id, args.provider)
+        case "presets":
+            _cmd_presets(args.project_id)
+        case _:  # pragma: no cover — required=True makes argparse enforce this
+            return False
+    return True
+
+
+# ── Handlers ───────────────────────────────────────────────────────────
+
+
+def _cmd_project_list() -> None:
+    """List all known projects."""
+    projs = list_projects()
+    if not projs:
+        print("No projects found")
+        return
+    print("Known projects:")
+    for p in projs:
+        upstream = p.upstream_url or "-"
+        shared = f" shared={p.shared_dir}" if p.shared_dir else ""
+        print(f"- {p.id} [{p.security_class}] upstream={upstream}{shared} config_root={p.root}")
+
+
+def _cmd_project_derive(source_id: str, new_id: str) -> None:
+    """Derive a new project from an existing one."""
+    project = derive_project(source_id, new_id)
+    config_path = project.config.root / "project.yml"
+    print(
+        f"Derived project '{new_id}' from '{source_id}' — "
+        f"shares git gate and SSH key with source.\n"
+        f"Config: {config_path}"
+    )
+    offer_edit_then_init(config_path, new_id, init_fn=cmd_project_init)
 
 
 def _cmd_project_delete(project_id: str, *, force: bool = False) -> None:
@@ -148,3 +270,39 @@ def _cmd_project_delete(project_id: str, *, force: bool = False) -> None:
         print("Skipped:")
         for reason in result["skipped"]:
             print(f"  - {reason}")
+
+
+def _cmd_ssh_init(args: argparse.Namespace) -> None:
+    """Initialise the project's SSH directory and generate a keypair."""
+    project = load_project(args.project_id)
+    result = make_ssh_manager(project).init(
+        key_type=getattr(args, "key_type", "ed25519"),
+        key_name=getattr(args, "key_name", None),
+        force=getattr(args, "force", False),
+    )
+    register_ssh_key(project.id, result)
+
+
+def _cmd_gate_sync(args: argparse.Namespace) -> None:
+    """Sync the host-side git gate for a project."""
+    res = make_git_gate(load_project(args.project_id)).sync(
+        force_reinit=getattr(args, "force_reinit", False),
+    )
+    if not res["success"]:
+        raise SystemExit(f"Gate sync failed: {', '.join(res['errors'])}")
+    cache_note = " (clone cache refreshed)" if res.get("cache_refreshed") else ""
+    print(
+        f"Gate ready at {res['path']} "
+        f"(upstream: {res['upstream_url']}; created: {res['created']}){cache_note}"
+    )
+
+
+def _cmd_presets(project_id: str) -> None:
+    """List available agent-config presets for a project."""
+    presets = list_presets(project_id)
+    if not presets:
+        print(f"No presets found for project '{project_id}'")
+        return
+    print(f"Presets for '{project_id}':")
+    for info in presets:
+        print(f"  - {info.name} ({info.source})")

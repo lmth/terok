@@ -89,8 +89,8 @@ class TestEmojiFlag:
     """Verify --no-emoji flag propagation."""
 
     def test_no_emoji_flag_accepted(self) -> None:
-        """``terok --no-emoji config`` does not error on the flag."""
-        result = _run_cli("--no-emoji", "config")
+        """``terok --no-emoji config paths`` does not error on the flag."""
+        result = _run_cli("--no-emoji", "config", "paths")
         assert result.returncode == 0
 
 

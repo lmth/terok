@@ -46,8 +46,8 @@ class TestSshInit:
             PROJECT_TEMPLATE.format(project_id="demo"),
         )
 
-        first = terok_env.run_cli("ssh-init", "demo")
-        second = terok_env.run_cli("ssh-init", "demo")
+        first = terok_env.run_cli("project", "ssh-init", "demo")
+        second = terok_env.run_cli("project", "ssh-init", "demo")
 
         ssh_dir = terok_env.sandbox_state_root / "ssh-keys" / "demo"
         private_key = ssh_dir / "id_ed25519_demo"
@@ -77,7 +77,7 @@ class TestSshInit:
             CUSTOM_HOST_DIR_TEMPLATE.format(project_id="custom", host_dir=custom_dir),
         )
 
-        result = terok_env.run_cli("ssh-init", "custom", "--key-name", "id_custom")
+        result = terok_env.run_cli("project", "ssh-init", "custom", "--key-name", "id_custom")
 
         assert "SSH directory initialized:" in result.stdout
         assert (custom_dir / "id_custom").is_file()

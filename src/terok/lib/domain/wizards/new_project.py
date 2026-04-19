@@ -244,9 +244,9 @@ def offer_edit_then_init(
                 print(f"\nProject '{project_id}' is ready.")
                 return
 
-        print(f"Next step: terok project-init {project_id}")
+        print(f"Next step: terok project init {project_id}")
     except (KeyboardInterrupt, EOFError):
-        print(f"\nSkipped. Run manually: terok project-init {project_id}")
+        print(f"\nSkipped. Run manually: terok project init {project_id}")
 
 
 def run_wizard(init_fn: Callable[[str], None] | None = None) -> Path | None:

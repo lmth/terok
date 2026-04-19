@@ -18,7 +18,6 @@ from ..lib.core.version import format_version_string, get_version_info
 from .commands import (
     clearance,
     completions,
-    credentials,
     dbus,
     image,
     info,
@@ -27,8 +26,8 @@ from .commands import (
     setup,
     shield,
     sickbay,
-    storage,
     task,
+    vault_local,
 )
 from .wiring import wire_dispatch, wire_group
 
@@ -44,10 +43,9 @@ _DISPATCHERS = [
     panic.dispatch,
     task.dispatch,
     project.dispatch,
-    credentials.dispatch,
     setup.dispatch,
     image.dispatch,
-    storage.dispatch,
+    vault_local.dispatch,  # must precede wire_dispatch — handles `vault serve`
     wire_dispatch,
     shield.dispatch,
     dbus.dispatch,
@@ -97,10 +95,10 @@ def main(prog: str = "terok") -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Quick start:\n"
-            f"  1. Bootstrap:  {prog} setup                        (install host services)\n"
-            f"  2. Project:    {prog} project-wizard                (create a project)\n"
-            f"  3. Auth:       {prog} auth claude <project>         (authenticate agents)\n"
-            f"  4. Work:       {prog} task start <project_id>       (new CLI task)\n"
+            f"  1. Bootstrap:  {prog} setup                          (install host services)\n"
+            f"  2. Project:    {prog} project wizard                 (create a project)\n"
+            f"  3. Auth:       {prog} project auth claude <project>  (authenticate agents)\n"
+            f"  4. Work:       {prog} task start <project_id>        (new CLI task)\n"
             f"  5. Login:      {prog} login <project_id> <task_id>\n"
             "\n"
             "Standalone agent (no project):\n"
@@ -133,10 +131,8 @@ def main(prog: str = "terok") -> None:
     panic.register(sub)
     task.register(sub)
     project.register(sub)
-    credentials.register(sub)  # vault-serve (standalone)
     setup.register(sub)
     image.register(sub)
-    storage.register(sub)
     shield.register(sub)
     dbus.register(sub)
     clearance.register(sub)
@@ -160,13 +156,17 @@ def main(prog: str = "terok") -> None:
         help="Gate server commands",
         config_factory=make_sandbox_config,
     )
-    wire_group(
+    vault_wiring = wire_group(
         sub,
         "vault",
         AGENT_VAULT_COMMANDS,
         help="Vault commands",
         config_factory=make_sandbox_config,
+        return_action=True,
     )
+    assert vault_wiring is not None  # return_action=True guarantees a tuple
+    _, vault_sub = vault_wiring
+    vault_local.register(vault_sub)
     wire_group(
         sub,
         "ssh",

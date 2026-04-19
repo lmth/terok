@@ -271,7 +271,7 @@ def _check_ssh_signer() -> _CheckResult:
     keys_path = cfg.ssh_keys_json_path
 
     if not keys_path.is_file():
-        return ("warn", label, "no ssh-keys.json — run 'terok ssh-init <project>'")
+        return ("warn", label, "no ssh-keys.json — run 'terok project ssh-init <project>'")
 
     try:
         mapping = json.loads(keys_path.read_text(encoding="utf-8"))
@@ -295,14 +295,14 @@ def _check_ssh_signer() -> _CheckResult:
             "error",
             label,
             f"{len(broken)}/{total} project(s) have missing key files: "
-            f"{_abbreviate(broken)} — re-run 'terok ssh-init'",
+            f"{_abbreviate(broken)} — re-run 'terok project ssh-init <project>'",
         )
     if unregistered:
         return (
             "warn",
             label,
             f"{registered}/{total} project(s) have SSH keys — missing: "
-            f"{_abbreviate(unregistered)}. Run 'terok ssh-init <project>'",
+            f"{_abbreviate(unregistered)}. Run 'terok project ssh-init <project>'",
         )
     return ("ok", label, f"{total}/{total} project(s) have SSH keys")
 

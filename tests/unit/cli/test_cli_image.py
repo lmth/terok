@@ -69,3 +69,66 @@ def test_cmd_cleanup_outputs_expected(
     with patch("terok.cli.commands.image.cleanup_images", return_value=result):
         _cmd_cleanup(dry_run=result.dry_run)
     assert_output_contains(capsys.readouterr().out, expected_lines)
+
+
+class TestImageDispatch:
+    """The ``image`` group routes list, cleanup, and usage subcommands correctly.
+
+    (``usage`` dispatch is also exercised through its render pipelines in
+    ``test_cli_image_usage.py``; the minimal routing check lives here so all
+    three match-arms are visible in one place.)
+    """
+
+    def test_ignores_non_image(self) -> None:
+        """Dispatch returns False for commands outside the image group."""
+        import argparse
+
+        from terok.cli.commands.image import dispatch
+
+        assert dispatch(argparse.Namespace(cmd="task")) is False
+
+    def test_list_invokes_handler_with_project_filter(self) -> None:
+        """``image list <project>`` forwards the project filter."""
+        import argparse
+
+        from terok.cli.commands.image import dispatch
+
+        args = argparse.Namespace(cmd="image", image_cmd="list", project_id="myproj")
+        with patch("terok.cli.commands.image._cmd_list") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with("myproj")
+
+    def test_list_without_project_defaults_to_none(self) -> None:
+        """``image list`` with no positional passes None through."""
+        import argparse
+
+        from terok.cli.commands.image import dispatch
+
+        args = argparse.Namespace(cmd="image", image_cmd="list")
+        with patch("terok.cli.commands.image._cmd_list") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with(None)
+
+    def test_cleanup_forwards_dry_run_flag(self) -> None:
+        """``image cleanup --dry-run`` forwards the flag."""
+        import argparse
+
+        from terok.cli.commands.image import dispatch
+
+        args = argparse.Namespace(cmd="image", image_cmd="cleanup", dry_run=True)
+        with patch("terok.cli.commands.image._cmd_cleanup") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with(dry_run=True)
+
+    def test_usage_forwards_project_and_json_flags(self) -> None:
+        """``image usage --project X --json`` routes to the usage helper."""
+        import argparse
+
+        from terok.cli.commands.image import dispatch
+
+        args = argparse.Namespace(
+            cmd="image", image_cmd="usage", project="myproj", json_output=True
+        )
+        with patch("terok.cli.commands.image._cmd_usage") as mock:
+            assert dispatch(args) is True
+        mock.assert_called_once_with(project_id="myproj", json_output=True)

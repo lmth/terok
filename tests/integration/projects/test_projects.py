@@ -56,7 +56,7 @@ class TestProjects:
     """Verify project workflows through the real CLI."""
 
     def test_projects_lists_user_and_system_projects(self, terok_env: TerokIntegrationEnv) -> None:
-        """``terok projects`` lists projects from both isolated config roots."""
+        """``terok project list`` lists projects from both isolated config roots."""
         terok_env.write_project("alpha", SOURCE_PROJECT)
         terok_env.write_project(
             "sysalpha",
@@ -64,7 +64,7 @@ class TestProjects:
             scope="system",
         )
 
-        result = terok_env.run_cli("projects")
+        result = terok_env.run_cli("project", "list")
 
         assert "Known projects:" in result.stdout
         assert (
@@ -82,7 +82,7 @@ class TestProjects:
         """``project-derive`` pins shared gate+SSH paths and clears ``agent:``."""
         terok_env.write_project("alpha", SOURCE_PROJECT)
 
-        result = terok_env.run_cli("project-derive", "alpha", "beta")
+        result = terok_env.run_cli("project", "derive", "alpha", "beta")
 
         target = terok_env.project_root("beta") / "project.yml"
         assert "Derived project 'beta' from 'alpha'" in result.stdout
@@ -101,7 +101,7 @@ class TestProjects:
         assert derived["ssh"]["host_dir"] == str(expected_ssh_dir)
         assert derived["ssh"]["key_name"] == "id_alpha"
 
-        listed = terok_env.run_cli("projects")
+        listed = terok_env.run_cli("project", "list")
         assert "- alpha [online]" in listed.stdout
         assert "- beta [online]" in listed.stdout
 
@@ -115,7 +115,7 @@ class TestProjects:
         instructions = "# Alpha house rules\n\nAlways run `make lint` first.\n"
         (source_root / "instructions.md").write_text(instructions, encoding="utf-8")
 
-        terok_env.run_cli("project-derive", "alpha", "beta")
+        terok_env.run_cli("project", "derive", "alpha", "beta")
 
         derived_instructions = terok_env.project_root("beta") / "instructions.md"
         assert derived_instructions.is_file()
@@ -123,7 +123,7 @@ class TestProjects:
 
         # Sibling without source instructions.md stays clean.
         terok_env.write_project("gamma", SOURCE_PROJECT.replace("id: alpha", "id: gamma"))
-        terok_env.run_cli("project-derive", "gamma", "delta")
+        terok_env.run_cli("project", "derive", "gamma", "delta")
         assert not (terok_env.project_root("delta") / "instructions.md").exists()
 
     def test_project_derive_preserves_yaml_comments(self, terok_env: TerokIntegrationEnv) -> None:
@@ -135,7 +135,7 @@ class TestProjects:
         """
         terok_env.write_project("commented", COMMENTED_PROJECT)
 
-        terok_env.run_cli("project-derive", "commented", "derived")
+        terok_env.run_cli("project", "derive", "commented", "derived")
 
         target = terok_env.project_root("derived") / "project.yml"
         raw = target.read_text(encoding="utf-8")
