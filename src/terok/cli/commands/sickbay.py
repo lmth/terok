@@ -33,20 +33,27 @@ from terok_sandbox import (
     is_systemd_available,
     is_vault_socket_active,
     is_vault_systemd_available,
+    resolve_container_state_dir,
 )
 
 from ...lib.core import runtime as _rt
 from ...lib.core.config import get_services_mode, global_config_path, make_sandbox_config
-from ...lib.core.project_model import ProjectConfig
+from ...lib.core.project_model import ProjectConfig, is_valid_project_id
 from ...lib.core.projects import list_projects, load_project
 from ...lib.core.yaml_schema import SERVICES_TCP_OPTOUT_YAML
 from ...lib.orchestration.container_doctor import run_container_doctor
 from ...lib.orchestration.hooks import run_hook
-from ...lib.orchestration.tasks import container_name, tasks_meta_dir
+from ...lib.orchestration.tasks import container_name, is_task_id, tasks_meta_dir
 from ...lib.util.yaml import load as _yaml_load
 
 # Type alias for check results: (severity, label, detail)
 _CheckResult = tuple[str, str, str]
+
+#: Glob pattern for per-task metadata files under ``tasks_meta_dir(project_id)``.
+#: Used across multiple sickbay checks that enumerate tasks by walking the
+#: metadata directory.  Kept as a named constant so changing the convention
+#: later is a one-line edit.
+_TASK_META_GLOB = "*.yml"
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -153,12 +160,25 @@ def _check_vault() -> _CheckResult:
     return ("warn", label, "not running — run 'terok vault start'")
 
 
+def _task_meta_path(pid: str, tid: str) -> Path | None:
+    """Resolve a task's metadata YAML path, refusing traversal in *pid* / *tid*.
+
+    Both IDs arrive from CLI positional args (``terok sickbay <project>
+    <task>``).  A hostile value like ``../../etc/passwd`` would otherwise
+    escape ``tasks_meta_dir`` via ``Path`` join; reject anything that
+    doesn't match the established project/task-ID grammars.
+    """
+    if not is_valid_project_id(pid) or not is_task_id(tid):
+        return None
+    return tasks_meta_dir(pid) / f"{tid}.yml"
+
+
 def _check_task_hook(
     pid: str, tid: str, project: ProjectConfig, *, fix: bool
 ) -> _CheckResult | None:
     """Check a single task for unfired post_stop hook.  Returns None if ok."""
-    meta_path = tasks_meta_dir(pid) / f"{tid}.yml"
-    if not meta_path.is_file():
+    meta_path = _task_meta_path(pid, tid)
+    if meta_path is None or not meta_path.is_file():
         return None
 
     try:
@@ -211,6 +231,52 @@ def _reconcile_post_stop(
         return ("error", label, f"post_stop hook failed: {exc}")
 
 
+def _check_task_shield_annotation(
+    pid: str, tid: str, project: ProjectConfig
+) -> _CheckResult | None:
+    """Check that task_dir agrees with the container's ``terok.shield.state_dir``.
+
+    Drift between the two sides sends a verdict dispatched from the hub or
+    TUI (which only know the container name) to the wrong state dir, or to
+    nothing at all.  Non-shielded containers and stopped ones are skipped.
+    """
+    meta_path = _task_meta_path(pid, tid)
+    if meta_path is None or not meta_path.is_file():
+        return None
+    try:
+        meta = _yaml_load(meta_path.read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    mode = meta.get("mode")
+    if not mode:
+        return None
+    cname = container_name(pid, mode, tid)
+    if _rt.get_runtime().container(cname).state != "running":
+        return None
+
+    expected = (project.tasks_root / tid / "shield").resolve()
+    if not expected.is_dir():
+        return None  # task isn't shielded — nothing to compare against
+
+    label = f"Task {pid}/{tid} shield"
+    actual = resolve_container_state_dir(cname)
+    if actual is None:
+        return (
+            "warn",
+            label,
+            f"{cname!r}: no terok.shield.state_dir annotation, expected {expected} "
+            "— verdict dispatch will miss",
+        )
+    if actual.resolve() != expected:
+        return (
+            "warn",
+            label,
+            f"{cname!r}: annotation points at {actual}, expected {expected} "
+            "— filesystem moved without re-running pre_start?",
+        )
+    return None
+
+
 def _check_unfired_hooks(
     project_id: str | None, task_id: str | None, *, fix: bool
 ) -> list[_CheckResult]:
@@ -229,9 +295,35 @@ def _check_unfired_hooks(
         if not meta_dir.is_dir():
             continue
 
-        task_ids = [f.stem for f in meta_dir.glob("*.yml")] if task_id is None else [task_id]
+        task_ids = (
+            [f.stem for f in meta_dir.glob(_TASK_META_GLOB)] if task_id is None else [task_id]
+        )
         for tid in task_ids:
             result = _check_task_hook(pid, tid, project, fix=fix)
+            if result:
+                results.append(result)
+
+    return results
+
+
+def _check_shield_annotations(project_id: str | None, task_id: str | None) -> list[_CheckResult]:
+    """Verify every running task's container carries the expected shield annotation."""
+    results: list[_CheckResult] = []
+
+    if project_id:
+        projects = [(project_id, load_project(project_id))]
+    else:
+        projects = [(p.id, p) for p in list_projects()]
+
+    for pid, project in projects:
+        meta_dir = tasks_meta_dir(pid)
+        if not meta_dir.is_dir():
+            continue
+        task_ids = (
+            [f.stem for f in meta_dir.glob(_TASK_META_GLOB)] if task_id is None else [task_id]
+        )
+        for tid in task_ids:
+            result = _check_task_shield_annotation(pid, tid, project)
             if result:
                 results.append(result)
 
@@ -266,7 +358,7 @@ def _check_ssh_signer() -> _CheckResult:
     try:
         with vault_db() as db:
             assigned_scopes = set(db.list_scopes_with_ssh_keys())
-    except Exception as exc:  # noqa: BLE001 — surface any vault failure as a warning
+    except Exception as exc:  # noqa: BLE001
         return ("warn", label, f"vault unreachable — {exc}")
 
     unregistered = [p.id for p in projects if p.id not in assigned_scopes]
@@ -360,7 +452,7 @@ def _check_containers(
         meta_dir = tasks_meta_dir(pid)
         if not meta_dir.is_dir():
             continue
-        for meta_file in meta_dir.glob("*.yml"):
+        for meta_file in meta_dir.glob(_TASK_META_GLOB):
             tid = meta_file.stem
             for severity, label, detail in run_container_doctor(pid, tid, fix=fix):
                 # Prefix bare check labels with task context so multi-task
@@ -504,6 +596,11 @@ def _cmd_sickbay(
         print(f"  {label} .... {_STATUS_MARKERS.get(status, status)} ({detail})")
         worst = _update_worst(worst, status)
 
+    annotation_results = _check_shield_annotations(project_id, task_id)
+    for status, label, detail in annotation_results:
+        print(f"  {label} .... {_STATUS_MARKERS.get(status, status)} ({detail})")
+        worst = _update_worst(worst, status)
+
     # In-container diagnostics for running tasks
     container_results = _check_containers(project_id, task_id, fix=fix)
     for status, label, detail in container_results:
@@ -511,7 +608,7 @@ def _cmd_sickbay(
         worst = _update_worst(worst, status)
 
     # Print "ok (consistent)" only when scoped to a single task and every result is "ok"
-    all_ok = all(s == "ok" for s, _, _ in hook_results + container_results)
+    all_ok = all(s == "ok" for s, _, _ in hook_results + annotation_results + container_results)
     if task_id and all_ok:
         print(f"  Task {project_id}/{task_id} .... ok (consistent)")
 
