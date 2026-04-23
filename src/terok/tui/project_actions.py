@@ -11,7 +11,6 @@ project and task actions.
 import os
 import shlex
 import subprocess
-import sys
 from collections.abc import Callable
 
 from terok_sandbox import (
@@ -24,6 +23,7 @@ from terok_sandbox import (
     uninstall_systemd_units,
     uninstall_vault_systemd,
 )
+from textual import work
 
 from ..lib.core.projects import load_project
 from ..lib.domain.facade import (
@@ -129,7 +129,15 @@ class ProjectActionsMixin:
         cname: str,
         label: str = "Opened",
     ) -> None:
-        """Launch *cmd* via tmux/terminal/web, falling back to a suspended TUI."""
+        """Launch *cmd* via tmux/terminal/web, falling back to a suspended TUI.
+
+        The in-process ``suspend()`` fallback is refused under
+        textual-serve — the web TUI has no terminal to suspend *to*,
+        and the attempt literally kills the served session.  Web users
+        get a notification with the equivalent CLI command instead.
+        """
+        from .shell_launch import is_web_mode
+
         method, port = launch_login(cmd, title=title)
 
         if method == "tmux":
@@ -139,6 +147,13 @@ class ProjectActionsMixin:
         elif method == "web" and port is not None:
             self.open_url(f"http://localhost:{port}")
             self.notify(f"{label} in browser: {cname}")
+        elif is_web_mode():
+            self.notify(
+                f"No terminal available in web mode.  Open a host shell and run: "
+                f"terok login {cname}",
+                severity="warning",
+                timeout=15,
+            )
         else:
             with self.suspend():
                 try:
@@ -454,30 +469,72 @@ class ProjectActionsMixin:
 
     # --- Project wizard ---
 
-    async def action_new_project_wizard(self) -> None:
-        """Launch the CLI project wizard in a suspended terminal."""
-        with self.suspend():
-            # Under Nix (and other setups where ``sys.executable`` is a
-            # wrapper that normally rewrites the env on startup) spawning
-            # directly from the TUI bypasses that wrapper, and the child
-            # ``python -m terok.cli`` can't find the ``terok`` package on
-            # its import path.  Passing the parent's ``sys.path`` through
-            # as ``PYTHONPATH`` lets the subprocess resolve the same
-            # install the TUI is running from.  See #717 by Franz Pöschel.
-            env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
-            try:
-                result = subprocess.run(
-                    [sys.executable, "-m", "terok.cli", "project", "wizard"],
-                    check=False,
-                    env=env,
+    def action_new_project_wizard(self) -> None:
+        """Open the Textual-native new-project wizard.
+
+        Kicks off the wizard flow in a Textual worker so that
+        ``push_screen_wait`` — which requires an active worker — can
+        sequence the three screens from one coroutine.  The old
+        subprocess+suspend path was incompatible with ``textual-serve``
+        (web TUI) — see issue #473.
+        """
+        self._run_wizard_flow()
+
+    @work(exclusive=True)
+    async def _run_wizard_flow(self) -> None:
+        """Drive form → review → init-progress, refreshing the list at the end.
+
+        The form/review loop preserves answers on "Back": the form
+        screen accepts an *initial* prefill dict, and the review
+        screen's ``REVIEW_BACK`` sentinel tells us to re-open the form
+        with the user's previous input instead of starting fresh.
+        ``None`` from either screen abandons the wizard.
+        """
+        from ..lib.domain.wizards.new_project import render_project_yaml
+        from .wizard_screens import (
+            REVIEW_BACK,
+            InitProgressScreen,
+            ProjectReviewScreen,
+            WizardFormScreen,
+        )
+
+        values: dict[str, str] | None = None
+        while True:
+            values = await self.push_screen_wait(WizardFormScreen(initial=values))
+            if values is None:
+                return  # user cancelled the form
+
+            rendered = render_project_yaml(values)
+            review_result = await self.push_screen_wait(
+                ProjectReviewScreen(values["project_id"], rendered)
+            )
+            if review_result is None:
+                return  # Escape on the review screen — abandon
+            if review_result is REVIEW_BACK:
+                continue  # loop back to the form, prefilled
+            # review_result is the (possibly edited) YAML string.
+            final_yaml = review_result
+            break
+
+        outcome = await self.push_screen_wait(InitProgressScreen(values["project_id"], final_yaml))
+        from .wizard_screens import InitOutcome
+
+        match outcome:
+            case InitOutcome.SUCCESS:
+                self.notify(f"Project '{values['project_id']}' is ready.")
+            case InitOutcome.DECLINED:
+                # User chose to keep the existing project.yml — benign
+                # no-op, not an error.  No notification needed; the log
+                # pane already told them what happened.
+                pass
+            case InitOutcome.FAILED:
+                self.notify(
+                    f"Project '{values['project_id']}' created but init did not complete. "
+                    "Fix any issues and run `terok project init` from the CLI.",
+                    severity="warning",
+                    timeout=10,
                 )
-                if result.returncode != 0:
-                    print(f"Wizard exited with code {result.returncode}")
-            except Exception as e:
-                print(f"Error: {e}")
-            input("\n[Press Enter to return to TerokTUI] ")
         await self.refresh_projects()
-        self.notify("Project list refreshed.")
 
     # --- Project delete ---
 

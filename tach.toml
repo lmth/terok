@@ -77,6 +77,7 @@ depends_on = [
     "terok.lib.core.runtime",
     "terok.lib.core.version",
     "terok.lib.domain.facade",
+    "terok.lib.domain.wizards.new_project",
     "terok.lib.util.emoji",
     "terok.lib.util.yaml",
 ]
@@ -737,7 +738,17 @@ expose = ["wait_for_container_exit", "follow_container_logs_cmd"]
 from = ["terok.lib.orchestration.autopilot"]
 
 [[interfaces]]
-expose = ["run_wizard", "offer_edit_then_init", "collect_wizard_inputs", "generate_config"]
+expose = [
+    "QUESTIONS",
+    "Question",
+    "collect_wizard_inputs",
+    "generate_config",
+    "offer_edit_then_init",
+    "render_project_yaml",
+    "run_wizard",
+    "validate_answer",
+    "write_project_yaml",
+]
 from = ["terok.lib.domain.wizards.new_project"]
 
 # Facade interface (stable boundary for presentation layer)
@@ -784,6 +795,7 @@ expose = [
     "is_task_image_old",
     "register_ssh_key",
     "maybe_pause_for_ssh_key_registration",
+    "project_needs_key_registration",
     "provision_ssh_key",
     "summarize_ssh_init",
     "vault_db",
