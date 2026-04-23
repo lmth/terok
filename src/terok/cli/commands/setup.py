@@ -336,6 +336,12 @@ def _ensure_vault(*, check_only: bool) -> bool:
             return False
 
     # Clean reinstall: stop → uninstall → install → verify reachability
+    from terok_sandbox import is_vault_systemd_available
+
+    if not is_vault_systemd_available():
+        print(f"{_warn_label()} (systemd not available — use 'terok daemon start' instead)")
+        return True
+
     try:
         stop_vault(cfg=cfg)
     except Exception:  # noqa: BLE001

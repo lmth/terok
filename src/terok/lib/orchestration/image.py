@@ -30,7 +30,7 @@ from terok_executor import (
 )
 
 from ..core import runtime as _rt
-from ..core.config import build_dir
+from ..core.config import build_dir, get_global_l0_ca_cert_file
 from ..core.images import project_cli_image, project_dev_image
 from ..core.project_model import ProjectConfig
 from ..core.projects import load_project
@@ -52,6 +52,53 @@ def _image_exists(image: str) -> bool:
     every caller — an ``image_exists = _image_exists`` alias would not.
     """
     return _rt.get_runtime().image(image).exists()
+
+
+def _inject_l0_ca_cert(dockerfile: str, cert_path: str, family: str) -> str:
+    """Inject a corporate CA certificate into an L0 Dockerfile.
+
+    The certificate is embedded inline (base64-encoded) so no build-context
+    ``COPY`` is needed.  The inject RUN layer is placed immediately after the
+    package-manager cleanup line so curl/wget pick up the trust store for any
+    subsequent RUN steps.
+
+    Args:
+        dockerfile: The rendered L0 Dockerfile content to patch.
+        cert_path:  Filesystem path to the PEM certificate file.
+        family:     ``"deb"`` or ``"rpm"``.
+
+    Returns:
+        The patched Dockerfile string, or the original if the anchor line is
+        not found (silently safe — the cert will simply be absent).
+    """
+    import base64
+
+    cert_pem = Path(cert_path).read_bytes()
+    cert_b64 = base64.b64encode(cert_pem).decode("ascii")
+
+    if family == "deb":
+        anchor = "rm -rf /var/lib/apt/lists/*"
+        cert_dest = "/usr/local/share/ca-certificates/corp-ca.crt"
+        update_cmd = "update-ca-certificates"
+    else:
+        anchor = "dnf clean all"
+        cert_dest = "/etc/pki/ca-trust/source/anchors/corp-ca.crt"
+        update_cmd = "update-ca-trust"
+
+    inject = f"\nRUN printf '%s' '{cert_b64}' | base64 -d > {cert_dest} \\\n    && {update_cmd}"
+
+    # Find the last line that contains the anchor and insert after it.
+    lines = dockerfile.splitlines(keepends=True)
+    for i in range(len(lines) - 1, -1, -1):
+        if anchor in lines[i]:
+            lines.insert(i + 1, inject + "\n")
+            return "".join(lines)
+
+    logging.getLogger(__name__).warning(
+        "l0_ca_cert_file: anchor %r not found in L0 Dockerfile — cert NOT injected",
+        anchor,
+    )
+    return dockerfile
 
 
 # ---------- Hashing ----------
@@ -164,8 +211,12 @@ def render_all_dockerfiles(project: ProjectConfig, *, family: str | None = None)
     from terok_executor.container.build import render_l0, render_l1
 
     fam = family or detect_family(project.base_image, override=project.family)
+    l0_dockerfile = render_l0(project.base_image, family=fam)
+    ca_cert_file = get_global_l0_ca_cert_file()
+    if ca_cert_file:
+        l0_dockerfile = _inject_l0_ca_cert(l0_dockerfile, ca_cert_file, fam)
     return {
-        "L0.Dockerfile": render_l0(project.base_image, family=fam),
+        "L0.Dockerfile": l0_dockerfile,
         "L1.cli.Dockerfile": render_l1(l0_image_tag(project.base_image), family=fam),
         "L2.Dockerfile": _render_l2(project),
     }

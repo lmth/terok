@@ -669,3 +669,14 @@ def is_claude_oauth_exposed() -> bool:
     instead of being replaced with a phantom marker.
     """
     return is_experimental() and get_claude_expose_oauth_token()
+
+
+def get_global_l0_ca_cert_file() -> str | None:
+    """Return the path to a CA certificate file to embed in L0 images, or ``None``.
+
+    Global config (config.yml)::
+
+        image:
+          l0_ca_cert_file: /etc/ssl/certs/my-corp-ca.pem
+    """
+    return _load_validated().image.l0_ca_cert_file

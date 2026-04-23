@@ -62,6 +62,8 @@ class ProjectConfig(BaseModel):
     """Podman ``--cpus`` limit from ``run.cpus`` in project.yml."""
     nested_containers: bool = False
     """Project runs podman/docker inside its container (see ``run.nested_containers``)."""
+    container_init: bool = False
+    """Pass ``--init`` to ``podman run`` so a proper init process runs as PID 1."""
     timezone: str | None = None
     """IANA timezone for task containers (from ``run.timezone``).
 

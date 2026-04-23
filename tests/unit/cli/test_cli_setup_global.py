@@ -202,7 +202,9 @@ def test_vault_check_not_installed(
 @patch("terok.lib.core.config.make_sandbox_config")
 @patch("terok_sandbox.uninstall_vault_systemd")
 @patch("terok_sandbox.stop_vault")
+@patch("terok_sandbox.is_vault_systemd_available", return_value=True)
 def test_vault_reinstall_and_verify(
+    _systemd: MagicMock,
     _stop: MagicMock,
     _uninstall: MagicMock,
     _cfg: MagicMock,
@@ -225,7 +227,9 @@ def test_vault_reinstall_and_verify(
 @patch("terok.lib.core.config.make_sandbox_config")
 @patch("terok_sandbox.uninstall_vault_systemd")
 @patch("terok_sandbox.stop_vault")
+@patch("terok_sandbox.is_vault_systemd_available", return_value=True)
 def test_vault_install_fails(
+    _systemd: MagicMock,
     _stop: MagicMock,
     _uninstall: MagicMock,
     _cfg: MagicMock,
@@ -248,7 +252,9 @@ def test_vault_install_fails(
 @patch("terok.lib.core.config.make_sandbox_config")
 @patch("terok_sandbox.uninstall_vault_systemd")
 @patch("terok_sandbox.stop_vault")
+@patch("terok_sandbox.is_vault_systemd_available", return_value=True)
 def test_vault_installed_but_unreachable(
+    _systemd: MagicMock,
     _stop: MagicMock,
     _uninstall: MagicMock,
     _cfg: MagicMock,

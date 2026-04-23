@@ -343,6 +343,7 @@ class TestRunContainer:
         p.memory_limit = None
         p.cpu_limit = None
         p.nested_containers = False
+        p.container_init = False
         return p
 
     def test_builds_runspec_and_delegates(self) -> None:

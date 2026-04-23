@@ -289,6 +289,15 @@ class RawRunSection(BaseModel):
             "containers work under SELinux without disabling labels wholesale."
         ),
     )
+    container_init: bool = Field(
+        default=False,
+        description=(
+            "Pass ``--init`` to ``podman run`` so a lightweight init process "
+            "(catatonit/tini) runs as PID 1.  Required when the container runs "
+            "processes that need a proper init to reap zombie children or handle "
+            "signals correctly."
+        ),
+    )
     timezone: str | None = Field(
         default=None,
         description=(
@@ -362,6 +371,16 @@ class RawImageSection(BaseModel):
     )
     user_snippet_file: str | None = Field(
         default=None, description="Path to a file containing a Dockerfile snippet"
+    )
+    l0_ca_cert_file: str | None = Field(
+        default=None,
+        description=(
+            "Path to a PEM CA certificate file to embed in the L0 base image. "
+            "Useful behind a corporate TLS-intercepting proxy.  The cert is "
+            "written to the system CA store (``/usr/local/share/ca-certificates/`` "
+            "for deb, ``/etc/pki/ca-trust/source/anchors/`` for rpm) and the "
+            "store is refreshed immediately after package installation."
+        ),
     )
 
 

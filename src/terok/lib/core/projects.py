@@ -210,6 +210,7 @@ def _build_project_config(
         memory_limit=raw.run.memory,
         cpu_limit=raw.run.cpus,
         nested_containers=raw.run.nested_containers,
+        container_init=raw.run.container_init,
         timezone=raw.run.timezone,
         task_name_categories=raw.tasks.name_categories,
         shield_drop_on_task_run=shield_drop,

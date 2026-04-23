@@ -511,6 +511,8 @@ def _project_runtime_flags(project: ProjectConfig) -> list[str]:
     flags: list[str] = []
     if project.nested_containers:
         flags += ["--security-opt", "label=nested", "--device", "/dev/fuse"]
+    if project.container_init:
+        flags += ["--init"]
     return flags
 
 

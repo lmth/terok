@@ -19,6 +19,7 @@ from .commands import (
     auth,
     clearance,
     completions,
+    daemon,
     dbus,
     image,
     info,
@@ -45,6 +46,7 @@ _DISPATCHERS = [
     panic.dispatch,
     setup.dispatch,
     uninstall.dispatch,
+    daemon.dispatch,
     auth.dispatch,
     project.dispatch,
     task.dispatch,
@@ -139,6 +141,7 @@ def main(prog: str = "terok") -> None:
     panic.register(sub)
     setup.register(sub)
     uninstall.register(sub)
+    daemon.register(sub)
     auth.register(sub)
     project.register(sub)
     task.register(
