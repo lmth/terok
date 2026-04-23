@@ -977,6 +977,12 @@ def _task_stop(project: ProjectConfig, task_id: str, *, timeout: int | None = No
     if state not in ("running", "paused"):
         raise SystemExit(f"Task {task_id} container is not stoppable (state: {state})")
 
+    # For prep tasks: extract the captured package log before stopping.
+    if mode == "prep":
+        from .prep import extract_and_merge_prep
+
+        extract_and_merge_prep(project, task_id)
+
     try:
         _rt.get_runtime().container(cname).stop(timeout=effective_timeout)
     except FileNotFoundError:

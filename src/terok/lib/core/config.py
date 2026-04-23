@@ -680,3 +680,19 @@ def get_global_l0_ca_cert_file() -> str | None:
           l0_ca_cert_file: /etc/ssl/certs/my-corp-ca.pem
     """
     return _load_validated().image.l0_ca_cert_file
+
+
+def prep_state_dir() -> Path:
+    """Return the directory that holds prep-session state (shims, logs, packages).
+
+    Layout::
+
+        <prep_state_dir>/
+          packages/          # per-base-image accumulated package lists
+            ubuntu-24.04.json
+          <task_id>/         # per-session ephemeral state
+            shims/           # package-manager shim scripts (bind-mounted RO)
+            profile_d/       # profile.d snippet that extends PATH
+            log/             # bind-mounted RW log dir from the container
+    """
+    return state_dir() / "prep"

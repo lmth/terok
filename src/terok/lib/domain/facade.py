@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 from ..core.images import project_cli_image
 from ..core.projects import derive_project as _derive_project, load_project
 from ..orchestration.image import build_images, generate_dockerfiles, image_exists
+from ..orchestration.prep import task_run_prep  # noqa: F401 — re-exported public API
 from ..orchestration.task_runners import (  # noqa: F401 — re-exported public API
     HeadlessRunRequest,
     task_followup_headless,
@@ -322,6 +323,7 @@ __all__ = [
     "task_run_cli",
     "task_run_toad",
     "task_run_headless",
+    "task_run_prep",
     "HeadlessRunRequest",
     "task_restart",
     "task_followup_headless",

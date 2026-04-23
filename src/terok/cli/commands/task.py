@@ -29,6 +29,7 @@ from ...lib.domain.facade import (
     task_restart,
     task_run_cli,
     task_run_headless,
+    task_run_prep,
     task_run_toad,
     task_status,
     task_stop,
@@ -175,6 +176,18 @@ def register(
     # ``task new`` creates metadata + workspace but does not start a
     # container.  Only useful as a building block for automation — humans
     # always want ``task run``.
+
+    # ``task prep`` — start an interactive prep container that tracks package
+    # manager activity and injects captured packages into L0 on stop.
+    t_prep = tsub.add_parser(
+        "prep",
+        help=(
+            "Start a prep container to install tools and capture them into L0"
+            " (stop with 'terok task stop' to persist)"
+        ),
+    )
+    _add_project_arg(t_prep, help="Project ID")
+
     if is_ctl:
         t_new = tsub.add_parser(
             "new",
@@ -460,6 +473,13 @@ def _dispatch_task_sub(args: argparse.Namespace) -> bool:
     # ``task new`` (terokctl scripting surface) — same: no task_id yet.
     if args.task_cmd == "new":
         task_new(args.project_id, name=getattr(args, "name", None))
+        return True
+
+    # ``task prep`` creates a new task and starts a monitored prep container.
+    if args.task_cmd == "prep":
+        task_id = task_new(args.project_id, name="prep")
+        _ensure_project_image(args.project_id)
+        task_run_prep(args.project_id, task_id)
         return True
 
     pid = args.project_id

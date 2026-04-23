@@ -65,6 +65,7 @@ MODE_DISPLAY: dict[str | None, ModeInfo] = {
     "cli": ModeInfo(emoji="\U0001f4bb", label="CLI"),
     "run": ModeInfo(emoji="\U0001f680", label="Autopilot"),
     "toad": ModeInfo(emoji="\U0001f438", label="Toad"),
+    "prep": ModeInfo(emoji="\U0001f527", label="Prep"),
     None: ModeInfo(emoji="\U0001f997", label=""),
 }
 
@@ -161,7 +162,7 @@ def mode_info(mode: str | None) -> ModeInfo:
 
 # ---------- Container naming ----------
 
-CONTAINER_MODES = ("cli", "web", "run", "toad")
+CONTAINER_MODES = ("cli", "web", "run", "toad", "prep")
 """All valid container mode suffixes used in container naming."""
 
 

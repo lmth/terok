@@ -221,8 +221,8 @@ class TestContainerName:
             assert result == f"proj-{mode}-{ID_B}"
 
     def test_container_modes_tuple(self) -> None:
-        """CONTAINER_MODES must include the four known modes."""
-        assert set(CONTAINER_MODES) == {"cli", "web", "run", "toad"}
+        """CONTAINER_MODES must include the known modes."""
+        assert set(CONTAINER_MODES) == {"cli", "web", "run", "toad", "prep"}
 
 
 # ---------- assert_task_id ----------

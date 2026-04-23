@@ -101,6 +101,64 @@ def _inject_l0_ca_cert(dockerfile: str, cert_path: str, family: str) -> str:
     return dockerfile
 
 
+def _inject_l0_prep_packages(dockerfile: str, pkgs: dict[str, list[str]], family: str) -> str:
+    """Inject captured prep packages into an L0 Dockerfile.
+
+    Inserts ``RUN apt-get install …`` (deb) or ``RUN dnf install …`` (rpm)
+    and ``RUN pip3 install …`` layers immediately after the package-manager
+    cleanup line so all subsequent build steps can rely on the packages.
+
+    Args:
+        dockerfile: Rendered L0 Dockerfile content to patch.
+        pkgs:       Normalized package buckets — ``"apt"``, ``"pip"``,
+                    ``"dnf"`` — as returned by :func:`.prep.get_prep_packages`.
+        family:     ``"deb"`` or ``"rpm"``.
+
+    Returns:
+        Patched Dockerfile string, or the original if no packages to inject
+        or if the anchor line is not found.
+    """
+    apt_pkgs = sorted(pkgs.get("apt", []))
+    pip_pkgs = sorted(pkgs.get("pip", []))
+    dnf_pkgs = sorted(pkgs.get("dnf", []))
+
+    if family == "deb":
+        anchor = "rm -rf /var/lib/apt/lists/*"
+    else:
+        anchor = "dnf clean all"
+
+    inject_parts: list[str] = []
+    if family == "deb" and apt_pkgs:
+        inject_parts.append(
+            "RUN apt-get install -y --no-install-recommends "
+            + " ".join(apt_pkgs)
+            + " \\\n    && rm -rf /var/lib/apt/lists/*"
+        )
+    if family == "rpm" and dnf_pkgs:
+        inject_parts.append(
+            "RUN dnf install -y " + " ".join(dnf_pkgs) + " \\\n    && dnf clean all"
+        )
+    if pip_pkgs:
+        inject_parts.append("RUN pip3 install --no-cache-dir " + " ".join(pip_pkgs))
+
+    if not inject_parts:
+        return dockerfile
+
+    inject_block = "\n" + "\n".join(inject_parts)
+
+    lines = dockerfile.splitlines(keepends=True)
+    for i in range(len(lines) - 1, -1, -1):
+        if anchor in lines[i]:
+            lines.insert(i + 1, inject_block + "\n")
+            return "".join(lines)
+
+    logging.getLogger(__name__).warning(
+        "prep packages: anchor %r not found in L0 Dockerfile — packages NOT injected",
+        anchor,
+    )
+    return dockerfile
+
+
 # ---------- Hashing ----------
 
 
@@ -215,6 +273,11 @@ def render_all_dockerfiles(project: ProjectConfig, *, family: str | None = None)
     ca_cert_file = get_global_l0_ca_cert_file()
     if ca_cert_file:
         l0_dockerfile = _inject_l0_ca_cert(l0_dockerfile, ca_cert_file, fam)
+    from .prep import get_prep_packages
+
+    prep_pkgs = get_prep_packages(project.base_image)
+    if any(prep_pkgs.values()):
+        l0_dockerfile = _inject_l0_prep_packages(l0_dockerfile, prep_pkgs, fam)
     return {
         "L0.Dockerfile": l0_dockerfile,
         "L1.cli.Dockerfile": render_l1(l0_image_tag(project.base_image), family=fam),
